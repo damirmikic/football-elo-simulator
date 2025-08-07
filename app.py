@@ -66,7 +66,7 @@ def calculate_single_match_probs(elo_home, elo_away, hfa_value=0):
     """
     elo_home_adj = elo_home + hfa_value
     p_home_win_no_draw = 1 / (1 + 10**((elo_away - elo_home_adj) / 400))
-    D = 0.60
+    D = 0.50
     prob_draw = D * np.sqrt(p_home_win_no_draw * (1 - p_home_win_no_draw))
     prob_home_win = p_home_win_no_draw * (1 - prob_draw)
     prob_away_win = (1 - p_home_win_no_draw) * (1 - prob_draw)
@@ -382,44 +382,57 @@ if not current_elo_df.empty:
                     prob_a_wins, prob_draw, prob_b_wins = calculate_single_match_probs(elo_a, elo_b, hfa_to_apply)
                     display_outcome_cards(team_a_name, team_b_name, prob_a_wins, prob_draw, prob_b_wins, elo_a, elo_b, display_format)
                 else: # Two-Legged Tie
-                    # --- Pre-match Calculations ---
+                    leg_choice = st.radio("Calculate for:", ("First Leg (Pre-Match)", "Second Leg (Live)"), horizontal=True)
+                    st.divider()
+
                     p_a_wins_leg1, p_draw_leg1, p_b_wins_leg1 = calculate_single_match_probs(elo_a, elo_b, hfa_to_apply)
                     p_b_wins_leg2, p_draw_leg2, p_a_wins_leg2 = calculate_single_match_probs(elo_b, elo_a, hfa_to_apply)
-                    prob_a_prog_outright = (p_a_wins_leg1 * p_a_wins_leg2) + (p_a_wins_leg1 * p_draw_leg2) + (p_draw_leg1 * p_a_wins_leg2)
-                    prob_b_prog_outright = (p_b_wins_leg1 * p_b_wins_leg2) + (p_b_wins_leg1 * p_draw_leg2) + (p_draw_leg1 * p_b_wins_leg2)
-                    prob_extra_time = 1 - prob_a_prog_outright - prob_b_prog_outright
-                    final_prob_a = prob_a_prog_outright + (prob_extra_time * 0.5)
-                    final_prob_b = prob_b_prog_outright + (prob_extra_time * 0.5)
 
-                    # --- UI Display ---
-                    st.subheader("Pre-Match Progression Probability")
-                    prog_col1, prog_col2 = st.columns(2, gap="medium")
-                    with prog_col1:
-                        with st.container(border=True):
-                            if st.button(f"{team_a_name} Progresses", key="team_a_progress"): st.session_state.selected_team = team_a_name
-                            st.markdown(f"<p style='text-align: center; font-size: 0.9em;'>Elo: {elo_a:.0f}</p>", unsafe_allow_html=True)
-                            if display_format == "Probabilities": st.progress(final_prob_a)
-                            st.markdown(f"<h4 style='text-align: center;'>{format_value(final_prob_a, display_format)}</h4>", unsafe_allow_html=True)
-                    with prog_col2:
-                        with st.container(border=True):
-                            if st.button(f"{team_b_name} Progresses", key="team_b_progress"): st.session_state.selected_team = team_b_name
-                            st.markdown(f"<p style='text-align: center; font-size: 0.9em;'>Elo: {elo_b:.0f}</p>", unsafe_allow_html=True)
-                            if display_format == "Probabilities": st.progress(final_prob_b)
-                            st.markdown(f"<h4 style='text-align: center;'>{format_value(final_prob_b, display_format)}</h4>", unsafe_allow_html=True)
-                    
-                    st.divider()
-                    
-                    # --- Leg 1 Section ---
-                    st.subheader(f"Leg 1 Outcome: {team_a_name} (Home) vs. {team_b_name} (Away)")
-                    display_outcome_cards(team_a_name, team_b_name, p_a_wins_leg1, p_draw_leg1, p_b_wins_leg1, elo_a, elo_b, display_format, draw_label="Draw Leg 1")
+                    if leg_choice == "First Leg (Pre-Match)":
+                        # --- Pre-match Calculations ---
+                        prob_a_prog_outright = (p_a_wins_leg1 * p_a_wins_leg2) + (p_a_wins_leg1 * p_draw_leg2) + (p_draw_leg1 * p_a_wins_leg2)
+                        prob_b_prog_outright = (p_b_wins_leg1 * p_b_wins_leg2) + (p_b_wins_leg1 * p_draw_leg2) + (p_draw_leg1 * p_b_wins_leg2)
+                        prob_extra_time = 1 - prob_a_prog_outright - prob_b_prog_outright
+                        final_prob_a = prob_a_prog_outright + (prob_extra_time * 0.5)
+                        final_prob_b = prob_b_prog_outright + (prob_extra_time * 0.5)
 
-                    # --- Live H2H Calculation Section ---
-                    if st.checkbox("Enter First Leg Result to get Live Progression Odds"):
-                        score_col1, score_col2 = st.columns(2)
-                        leg1_a_score = score_col1.number_input(f"{team_a_name} (Home) Score", min_value=0, step=1, key="leg1_a")
-                        leg1_b_score = score_col2.number_input(f"{team_b_name} (Away) Score", min_value=0, step=1, key="leg1_b")
+                        # --- UI Display ---
+                        st.subheader("Pre-Match Progression Probability")
+                        prog_col1, prog_col2 = st.columns(2, gap="medium")
+                        with prog_col1:
+                            with st.container(border=True):
+                                if st.button(f"{team_a_name} Progresses", key="team_a_progress"): st.session_state.selected_team = team_a_name
+                                st.markdown(f"<p style='text-align: center; font-size: 0.9em;'>Elo: {elo_a:.0f}</p>", unsafe_allow_html=True)
+                                if display_format == "Probabilities": st.progress(final_prob_a)
+                                st.markdown(f"<h4 style='text-align: center;'>{format_value(final_prob_a, display_format)}</h4>", unsafe_allow_html=True)
+                        with prog_col2:
+                            with st.container(border=True):
+                                if st.button(f"{team_b_name} Progresses", key="team_b_progress"): st.session_state.selected_team = team_b_name
+                                st.markdown(f"<p style='text-align: center; font-size: 0.9em;'>Elo: {elo_b:.0f}</p>", unsafe_allow_html=True)
+                                if display_format == "Probabilities": st.progress(final_prob_b)
+                                st.markdown(f"<h4 style='text-align: center;'>{format_value(final_prob_b, display_format)}</h4>", unsafe_allow_html=True)
                         
-                        # A simple simulation for the second leg to determine progression
+                        st.divider()
+                        
+                        # --- Leg 1 Section ---
+                        st.subheader(f"Leg 1 Outcome: {team_a_name} (Home) vs. {team_b_name} (Away)")
+                        display_outcome_cards(team_a_name, team_b_name, p_a_wins_leg1, p_draw_leg1, p_b_wins_leg1, elo_a, elo_b, display_format, draw_label="Draw Leg 1")
+
+                    elif leg_choice == "Second Leg (Live)":
+                        st.subheader("Enter First Leg Result")
+                        score_col1, score_col2 = st.columns(2)
+                        leg1_a_score = score_col1.number_input(f"{team_a_name} (Home) Score", min_value=0, step=1, key="leg1_a_live")
+                        leg1_b_score = score_col2.number_input(f"{team_b_name} (Away) Score", min_value=0, step=1, key="leg1_b_live")
+                        
+                        st.divider()
+                        
+                        # --- Leg 2 Section ---
+                        st.subheader(f"Leg 2 Outcome: {team_b_name} (Home) vs. {team_a_name} (Away)")
+                        display_outcome_cards(team_b_name, team_a_name, p_b_wins_leg2, p_draw_leg2, p_a_wins_leg2, elo_b, elo_a, display_format, draw_label="Draw Leg 2")
+                        
+                        st.divider()
+
+                        # --- Live H2H Calculation Section ---
                         num_h2h_sims = 10000
                         team_a_progress_count = 0
                         for _ in range(num_h2h_sims):
@@ -452,7 +465,6 @@ if not current_elo_df.empty:
                             st.metric(f"{team_a_name} to Progress", f"{live_prob_a:.1%}")
                         with live_prog_col2:
                             st.metric(f"{team_b_name} to Progress", f"{live_prob_b:.1%}")
-
 
             if st.session_state.selected_team and calculation_mode == "Historical Ratings":
                 st.divider()
