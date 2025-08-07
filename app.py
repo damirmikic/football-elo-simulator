@@ -66,7 +66,7 @@ def calculate_single_match_probs(elo_home, elo_away, hfa_value=0):
     """
     elo_home_adj = elo_home + hfa_value
     p_home_win_no_draw = 1 / (1 + 10**((elo_away - elo_home_adj) / 400))
-    D = 0.6
+    D = 0.50
     prob_draw = D * np.sqrt(p_home_win_no_draw * (1 - p_home_win_no_draw))
     prob_home_win = p_home_win_no_draw * (1 - prob_draw)
     prob_away_win = (1 - p_home_win_no_draw) * (1 - prob_draw)
@@ -322,10 +322,13 @@ if not current_elo_df.empty:
 
     current_elo_df['league_full'] = current_elo_df.apply(lambda row: f"{row['country']} (L{int(row['level'])})" if pd.notna(row['country']) and pd.notna(row['level']) else np.nan, axis=1)
     unique_leagues = current_elo_df['league_full'].dropna().unique()
-    leagues = sorted(unique_leagues)
-    selected_league = st.sidebar.selectbox("Filter by League", options=leagues, index=leagues.index("England (L1)") if "England (L1)" in leagues else 0)
+    leagues = ["All"] + sorted(unique_leagues)
+    selected_league = st.sidebar.selectbox("Filter by League", options=leagues)
 
-    league_club_names = sorted(current_elo_df[current_elo_df['league_full'] == selected_league].index.unique().tolist())
+    if selected_league == "All":
+        league_club_names = sorted(current_elo_df.index.unique().tolist())
+    else:
+        league_club_names = sorted(current_elo_df[current_elo_df['league_full'] == selected_league].index.unique().tolist())
     all_club_names = sorted(current_elo_df.index.unique().tolist())
 
     st.sidebar.header("Match Setup")
@@ -345,9 +348,9 @@ if not current_elo_df.empty:
         st.header("Team Selection")
         col1, col2 = st.columns(2)
         with col1:
-            team_a_name = st.selectbox("Select Home Team (Leg 1)", options=league_club_names, index=0 if league_club_names else -1)
+            team_a_name = st.selectbox("Select Home Team (Leg 1)", options=all_club_names, index=all_club_names.index("Man City") if "Man City" in all_club_names else 0)
         with col2:
-            team_b_name = st.selectbox("Select Away Team (Leg 1)", options=league_club_names, index=min(1, len(league_club_names)-1) if league_club_names else -1)
+            team_b_name = st.selectbox("Select Away Team (Leg 1)", options=all_club_names, index=all_club_names.index("Real Madrid") if "Real Madrid" in all_club_names else 1)
 
         if team_a_name and team_b_name:
             elo_a, elo_b, header_text, error_found = None, None, "", False
@@ -568,4 +571,3 @@ else:
 
 st.sidebar.markdown("---")
 st.sidebar.info("Data from ClubElo.com via `soccerdata`.")
-
