@@ -66,7 +66,7 @@ def calculate_single_match_probs(elo_home, elo_away, hfa_value=0):
     """
     elo_home_adj = elo_home + hfa_value
     p_home_win_no_draw = 1 / (1 + 10**((elo_away - elo_home_adj) / 400))
-    D = 0.55
+    D = 0.60
     prob_draw = D * np.sqrt(p_home_win_no_draw * (1 - p_home_win_no_draw))
     prob_home_win = p_home_win_no_draw * (1 - prob_draw)
     prob_away_win = (1 - p_home_win_no_draw) * (1 - prob_draw)
@@ -501,6 +501,13 @@ if not current_elo_df.empty:
                         st.subheader(f"Leg 1 Outcome: {team_a_name} (Home) vs. {team_b_name} (Away)")
                         display_outcome_cards(team_a_name, team_b_name, p_a_wins_leg1, p_draw_leg1, p_b_wins_leg1, elo_a, elo_b, display_format, draw_label="Draw Leg 1")
 
+                        st.divider()
+
+                        # --- Leg 2 Section ---
+                        st.subheader(f"Leg 2 Outcome: {team_b_name} (Home) vs. {team_a_name} (Away)")
+                        display_outcome_cards(team_b_name, team_a_name, p_b_wins_leg2, p_draw_leg2, p_a_wins_leg2, elo_b, elo_a, display_format, draw_label="Draw Leg 2")
+
+
                     elif leg_choice == "Second Leg (Live)":
                         st.subheader("Enter First Leg Result")
                         score_col1, score_col2 = st.columns(2)
@@ -511,7 +518,7 @@ if not current_elo_df.empty:
                         
                         # --- Leg 2 Section ---
                         st.subheader(f"Leg 2 Outcome: {team_b_name} (Home) vs. {team_a_name} (Away)")
-                        display_outcome_cards(team_b_name, team_a_name, p_b_wins_leg2, p_draw_leg2, p_a_wins_leg2, elo_b, elo_a, display_format, draw_label="Draw Leg 2")
+                        display_outcome_cards(team_b_name, team_a_name, p_b_wins_leg2, p_draw_leg2, p_a_wins_leg2, elo_b, elo_a, display_format, draw_label="Draw Leg 2 Live")
                         
                         st.divider()
 
@@ -806,4 +813,3 @@ else:
 
 st.sidebar.markdown("---")
 st.sidebar.info("Data from ClubElo.com via `soccerdata`.")
-
