@@ -389,7 +389,7 @@ if not current_elo_df.empty:
                     prob_extra_time = 1 - prob_a_prog_outright - prob_b_prog_outright
                     final_prob_a = prob_a_prog_outright + (prob_extra_time * 0.5)
                     final_prob_b = prob_b_prog_outright + (prob_extra_time * 0.5)
-                    st.subheader("Probability to Progress from Tie")
+                    st.subheader("Pre-Match Progression Probability")
                     prog_col1, prog_col2 = st.columns(2, gap="medium")
                     with prog_col1:
                         with st.container(border=True):
@@ -403,12 +403,43 @@ if not current_elo_df.empty:
                             st.markdown(f"<p style='text-align: center; font-size: 0.9em;'>Elo: {elo_b:.0f}</p>", unsafe_allow_html=True)
                             if display_format == "Probabilities": st.progress(final_prob_b)
                             st.markdown(f"<h4 style='text-align: center;'>{format_value(final_prob_b, display_format)}</h4>", unsafe_allow_html=True)
-                    st.divider()
-                    st.subheader(f"Leg 1 Outcome: {team_a_name} (Home) vs. {team_b_name} (Away)")
-                    display_outcome_cards(team_a_name, team_b_name, p_a_wins_leg1, p_draw_leg1, p_b_wins_leg1, elo_a, elo_b, display_format, draw_label="Draw Leg 1")
+                    
                     st.divider()
                     st.subheader(f"Leg 2 Outcome: {team_b_name} (Home) vs. {team_a_name} (Away)")
                     display_outcome_cards(team_b_name, team_a_name, p_b_wins_leg2, p_draw_leg2, p_a_wins_leg2, elo_b, elo_a, display_format, draw_label="Draw Leg 2")
+
+                    if st.checkbox("Enter First Leg Result"):
+                        score_col1, score_col2 = st.columns(2)
+                        leg1_a_score = score_col1.number_input(f"{team_a_name} (Home) Score", min_value=0, step=1)
+                        leg1_b_score = score_col2.number_input(f"{team_b_name} (Away) Score", min_value=0, step=1)
+                        
+                        # A simple simulation for the second leg to determine progression
+                        num_h2h_sims = 10000
+                        team_a_progress_count = 0
+                        for _ in range(num_h2h_sims):
+                            result = np.random.choice(['H', 'D', 'A'], p=[p_b_wins_leg2, p_draw_leg2, p_a_wins_leg2])
+                            # This is a simplified goal model, a more complex one could be used
+                            if result == 'H': leg2_b_score, leg2_a_score = 1, 0
+                            elif result == 'D': leg2_b_score, leg2_a_score = 1, 1
+                            else: leg2_b_score, leg2_a_score = 0, 1
+                            
+                            agg_a = leg1_a_score + leg2_a_score
+                            agg_b = leg1_b_score + leg2_b_score
+                            
+                            if agg_a > agg_b: team_a_progress_count += 1
+                            elif agg_a == agg_b: # Simplified tie-breaker (50/50)
+                                if np.random.rand() > 0.5: team_a_progress_count += 1
+                        
+                        live_prob_a = team_a_progress_count / num_h2h_sims
+                        live_prob_b = 1 - live_prob_a
+
+                        st.subheader("Live Progression Probability (after Leg 1)")
+                        live_prog_col1, live_prog_col2 = st.columns(2, gap="medium")
+                        with live_prog_col1:
+                            st.metric(f"{team_a_name} to Progress", f"{live_prob_a:.1%}")
+                        with live_prog_col2:
+                            st.metric(f"{team_b_name} to Progress", f"{live_prob_b:.1%}")
+
 
             if st.session_state.selected_team and calculation_mode == "Historical Ratings":
                 st.divider()
