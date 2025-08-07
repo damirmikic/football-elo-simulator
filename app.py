@@ -806,3 +806,4 @@ else:
 
 st.sidebar.markdown("---")
 st.sidebar.info("Data from ClubElo.com via `soccerdata`.")
+" and I want to fix the er
