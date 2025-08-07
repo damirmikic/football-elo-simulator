@@ -66,7 +66,7 @@ def calculate_single_match_probs(elo_home, elo_away, hfa_value=0):
     """
     elo_home_adj = elo_home + hfa_value
     p_home_win_no_draw = 1 / (1 + 10**((elo_away - elo_home_adj) / 400))
-    D = 0.50
+    D = 0.60
     prob_draw = D * np.sqrt(p_home_win_no_draw * (1 - p_home_win_no_draw))
     prob_home_win = p_home_win_no_draw * (1 - prob_draw)
     prob_away_win = (1 - p_home_win_no_draw) * (1 - prob_draw)
@@ -602,3 +602,4 @@ else:
 
 st.sidebar.markdown("---")
 st.sidebar.info("Data from ClubElo.com via `soccerdata`.")
+
