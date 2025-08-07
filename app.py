@@ -230,6 +230,58 @@ def run_knockout_simulation(teams_df, num_simulations, first_round_matchups):
     results = pd.Series(winners) / num_simulations
     return results.sort_values(ascending=False)
 
+def run_custom_knockout_simulation(teams_df, num_simulations, custom_rounds):
+    """Simulates a knockout tournament with a custom bracket structure."""
+    teams = teams_df.index.tolist()
+    initial_elos = teams_df['elo'].to_dict()
+    tournament_winners = {team: 0 for team in teams}
+    
+    status_text = st.empty()
+    progress_bar = st.progress(0)
+
+    for i in range(num_simulations):
+        status_text.text(f"Running simulation {i + 1}/{num_simulations}...")
+        
+        match_results = {} # Stores {'M1': ('Winner', 'Loser'), ...} for this simulation run
+        
+        for round_idx, round_matchups in enumerate(custom_rounds):
+            for match_idx, matchup in enumerate(round_matchups):
+                match_id = f"M{round_idx+1}.{match_idx+1}"
+                
+                # Resolve team names from matchup descriptions (e.g., 'Winner of M1.1')
+                team1_desc, team2_desc = matchup
+                
+                team1 = team1_desc if ' of ' not in team1_desc else \
+                        match_results[team1_desc.split(' of ')[1]][0] if 'Winner' in team1_desc else \
+                        match_results[team1_desc.split(' of ')[1]][1]
+                
+                team2 = team2_desc if ' of ' not in team2_desc else \
+                        match_results[team2_desc.split(' of ')[1]][0] if 'Winner' in team2_desc else \
+                        match_results[team2_desc.split(' of ')[1]][1]
+
+                # Simulate the match
+                prob1_wins, _, prob2_wins = calculate_single_match_probs(initial_elos[team1], initial_elos[team2], hfa_value=0)
+                if prob1_wins + prob2_wins == 0: # Avoid division by zero if both have 0% chance
+                    winner = np.random.choice([team1, team2])
+                else:
+                    winner = np.random.choice([team1, team2], p=[prob1_wins / (prob1_wins + prob2_wins), prob2_wins / (prob1_wins + prob2_wins)])
+                loser = team2 if winner == team1 else team1
+                
+                match_results[match_id] = (winner, loser)
+
+        # The winner of the last match is the tournament champion
+        if match_results:
+            final_match_id = f"M{len(custom_rounds)}.{len(custom_rounds[-1])}"
+            tournament_champion = match_results[final_match_id][0]
+            tournament_winners[tournament_champion] += 1
+            
+        progress_bar.progress((i + 1) / num_simulations)
+        
+    status_text.success("Simulation complete!")
+    results = pd.Series(tournament_winners) / num_simulations
+    return results.sort_values(ascending=False)
+
+
 def run_round_robin_simulation(teams_df, num_simulations, hfa_value, robin_format="Double"):
     """Simulates a round-robin tournament."""
     teams = teams_df.index.tolist()
@@ -306,6 +358,8 @@ def display_outcome_cards(team1_name, team2_name, prob1, prob_draw, prob2, elo1,
 st.title("⚽ Football Elo Odds Calculator")
 
 if 'selected_team' not in st.session_state: st.session_state.selected_team = None
+if 'custom_rounds' not in st.session_state: st.session_state.custom_rounds = []
+
 current_elo_df = load_current_elo_data()
 
 if not current_elo_df.empty:
@@ -462,9 +516,15 @@ if not current_elo_df.empty:
                         st.subheader("Live Progression Probability (after Leg 1)")
                         live_prog_col1, live_prog_col2 = st.columns(2, gap="medium")
                         with live_prog_col1:
-                            st.metric(f"{team_a_name} to Progress", f"{live_prob_a:.1%}")
+                            if display_format == "Probabilities":
+                                st.metric(f"{team_a_name} to Progress", f"{live_prob_a:.1%}")
+                            else:
+                                st.metric(f"{team_a_name} to Progress", f"{format_value(live_prob_a, display_format)}")
                         with live_prog_col2:
-                            st.metric(f"{team_b_name} to Progress", f"{live_prob_b:.1%}")
+                            if display_format == "Probabilities":
+                                st.metric(f"{team_b_name} to Progress", f"{live_prob_b:.1%}")
+                            else:
+                                st.metric(f"{team_b_name} to Progress", f"{format_value(live_prob_b, display_format)}")
 
             if st.session_state.selected_team and calculation_mode == "Historical Ratings":
                 st.divider()
@@ -557,11 +617,37 @@ if not current_elo_df.empty:
     with tab3:
         st.header("Custom Tournament Simulation")
         
-        tournament_format = st.selectbox("Tournament Format:", ["Single Elimination Knockout", "Single Round Robin", "Double Round Robin"])
+        tournament_format = st.selectbox("Tournament Format:", ["Single Elimination Knockout", "Custom Knockout", "Single Round Robin", "Double Round Robin"])
         
         selected_teams = st.multiselect("Select Teams:", options=all_club_names)
         
         num_knockout_sims = st.number_input("Number of tournament simulations:", min_value=10, max_value=10000, value=1000, step=100)
+
+        if tournament_format == "Custom Knockout":
+            st.subheader("Build Your Custom Bracket")
+            
+            if st.button("Add Round"):
+                st.session_state.custom_rounds.append([])
+            
+            for i, round_matchups in enumerate(st.session_state.custom_rounds):
+                st.markdown(f"--- \n#### Round {i+1}")
+                
+                if st.button(f"Add Matchup to Round {i+1}", key=f"add_match_r{i}"):
+                    round_matchups.append((None, None))
+                
+                # Generate options for dropdowns
+                options = selected_teams.copy()
+                if i > 0:
+                    for r_idx, r_matchups in enumerate(st.session_state.custom_rounds[:i]):
+                        for m_idx in range(len(r_matchups)):
+                            options.append(f"Winner of M{r_idx+1}.{m_idx+1}")
+                            options.append(f"Loser of M{r_idx+1}.{m_idx+1}")
+
+                for j, matchup in enumerate(round_matchups):
+                    cols = st.columns(2)
+                    team1 = cols[0].selectbox(f"Match {j+1} - Team A", options=options, key=f"r{i}_m{j}_tA", index=None)
+                    team2 = cols[1].selectbox(f"Match {j+1} - Team B", options=options, key=f"r{i}_m{j}_tB", index=None)
+                    st.session_state.custom_rounds[i][j] = (team1, team2)
 
         first_round_matchups = []
         manual_matchups_valid = True
@@ -578,7 +664,6 @@ if not current_elo_df.empty:
                         if team1 and team2:
                             first_round_matchups.append((team1, team2))
                     
-                    # Validate matchups on the fly
                     all_matchup_teams = [team for pair in first_round_matchups for team in pair]
                     if len(all_matchup_teams) != num_teams and len(first_round_matchups) == num_teams // 2:
                          st.warning("Please assign all selected teams to a matchup.")
@@ -592,6 +677,24 @@ if not current_elo_df.empty:
         if st.button("Run Custom Simulation"):
             if not selected_teams:
                 st.warning("Please select at least two teams.")
+
+            elif tournament_format == "Custom Knockout":
+                # Validate that all matchups are filled
+                is_valid_bracket = all(all(matchup) for round_matchups in st.session_state.custom_rounds for matchup in round_matchups)
+                if st.session_state.custom_rounds and is_valid_bracket:
+                    knockout_teams_df = current_elo_df.loc[selected_teams][['elo']].copy()
+                    custom_knockout_results = run_custom_knockout_simulation(knockout_teams_df, num_knockout_sims, st.session_state.custom_rounds)
+                    
+                    st.subheader("Tournament Win Probability")
+                    if display_format == "Decimal Odds":
+                        custom_knockout_results = custom_knockout_results.apply(lambda p: 1/p if p > 0 else np.nan)
+                        st.dataframe(custom_knockout_results.to_frame(name="Decimal Odds").style.format("{:.2f}", na_rep="-"))
+                    else:
+                        st.dataframe(custom_knockout_results.to_frame(name="Win Probability").style.format("{:.1%}"))
+                    st.bar_chart(custom_knockout_results)
+                else:
+                    st.error("Please ensure all matchups in your custom bracket are filled before running the simulation.")
+
             elif tournament_format == "Single Elimination Knockout":
                 num_teams = len(selected_teams)
                 if num_teams > 1 and (num_teams & (num_teams - 1) == 0):
@@ -613,6 +716,7 @@ if not current_elo_df.empty:
                         st.bar_chart(knockout_results)
                 else:
                     st.error("Please select a number of teams that is a power of 2 (e.g., 4, 8, 16, 32) for a knockout tournament.")
+            
             else: # Round Robin formats
                 robin_format = "Single" if tournament_format == "Single Round Robin" else "Double"
                 round_robin_teams_df = current_elo_df.loc[selected_teams][['elo']].copy()
