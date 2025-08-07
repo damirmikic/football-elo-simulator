@@ -230,8 +230,8 @@ def run_knockout_simulation(teams_df, num_simulations, first_round_matchups):
     results = pd.Series(winners) / num_simulations
     return results.sort_values(ascending=False)
 
-def run_custom_knockout_simulation(teams_df, num_simulations, custom_rounds):
-    """Simulates a knockout tournament with a custom bracket structure."""
+def run_custom_knockout_simulation(teams_df, num_simulations, custom_rounds, hfa_value):
+    """Simulates a knockout tournament with a custom bracket structure, including two-legged ties."""
     teams = teams_df.index.tolist()
     initial_elos = teams_df['elo'].to_dict()
     tournament_winners = {team: 0 for team in teams}
@@ -242,14 +242,14 @@ def run_custom_knockout_simulation(teams_df, num_simulations, custom_rounds):
     for i in range(num_simulations):
         status_text.text(f"Running simulation {i + 1}/{num_simulations}...")
         
-        match_results = {} # Stores {'M1': ('Winner', 'Loser'), ...} for this simulation run
+        match_results = {} # Stores {'M1.1': ('Winner', 'Loser'), ...} for this simulation run
         
         for round_idx, round_matchups in enumerate(custom_rounds):
-            for match_idx, matchup in enumerate(round_matchups):
+            for match_idx, matchup_details in enumerate(round_matchups):
                 match_id = f"M{round_idx+1}.{match_idx+1}"
                 
-                # Resolve team names from matchup descriptions (e.g., 'Winner of M1.1')
-                team1_desc, team2_desc = matchup
+                team1_desc = matchup_details['team_a']
+                team2_desc = matchup_details['team_b']
                 
                 team1 = team1_desc if ' of ' not in team1_desc else \
                         match_results[team1_desc.split(' of ')[1]][0] if 'Winner' in team1_desc else \
@@ -259,19 +259,48 @@ def run_custom_knockout_simulation(teams_df, num_simulations, custom_rounds):
                         match_results[team2_desc.split(' of ')[1]][0] if 'Winner' in team2_desc else \
                         match_results[team2_desc.split(' of ')[1]][1]
 
-                # Simulate the match
-                prob1_wins, _, prob2_wins = calculate_single_match_probs(initial_elos[team1], initial_elos[team2], hfa_value=0)
-                if prob1_wins + prob2_wins == 0: # Avoid division by zero if both have 0% chance
-                    winner = np.random.choice([team1, team2])
+                # --- Simulate the Match ---
+                if not matchup_details['is_two_legged']:
+                    # Standard single-leg neutral venue match
+                    prob1_wins, _, prob2_wins = calculate_single_match_probs(initial_elos[team1], initial_elos[team2], hfa_value=0)
+                    if prob1_wins + prob2_wins == 0:
+                        winner = np.random.choice([team1, team2])
+                    else:
+                        winner = np.random.choice([team1, team2], p=[prob1_wins / (prob1_wins + prob2_wins), prob2_wins / (prob1_wins + prob2_wins)])
+                    loser = team2 if winner == team1 else team1
                 else:
-                    winner = np.random.choice([team1, team2], p=[prob1_wins / (prob1_wins + prob2_wins), prob2_wins / (prob1_wins + prob2_wins)])
-                loser = team2 if winner == team1 else team1
+                    # Two-legged tie with a given first leg result
+                    leg1_a_score = matchup_details['leg1_a']
+                    leg1_b_score = matchup_details['leg1_b']
+                    
+                    # Simulate the second leg (team B is home)
+                    p_b_wins_leg2, p_draw_leg2, p_a_wins_leg2 = calculate_single_match_probs(initial_elos[team2], initial_elos[team1], hfa_value)
+                    result = np.random.choice(['H', 'D', 'A'], p=[p_b_wins_leg2, p_draw_leg2, p_a_wins_leg2])
+                    
+                    if result == 'H': leg2_b_score, leg2_a_score = 1, 0
+                    elif result == 'D': leg2_b_score, leg2_a_score = 1, 1
+                    else: leg2_b_score, leg2_a_score = 0, 1
+                    
+                    agg_a = leg1_a_score + leg2_a_score
+                    agg_b = leg1_b_score + leg2_b_score
+                    
+                    if agg_a > agg_b:
+                        winner, loser = team1, team2
+                    elif agg_b > agg_a:
+                        winner, loser = team2, team1
+                    else: # Aggregate is drawn, check away goals then coin flip
+                        if leg2_a_score > leg1_b_score:
+                            winner, loser = team1, team2
+                        elif leg1_b_score > leg2_a_score:
+                            winner, loser = team2, team1
+                        else:
+                            winner = np.random.choice([team1, team2])
+                            loser = team2 if winner == team1 else team1
                 
                 match_results[match_id] = (winner, loser)
 
-        # The winner of the last match is the tournament champion
         if match_results:
-            final_match_id = f"M{len(custom_rounds)}.{len(custom_rounds[-1])}"
+            final_match_id = list(match_results.keys())[-1]
             tournament_champion = match_results[final_match_id][0]
             tournament_winners[tournament_champion] += 1
             
@@ -629,25 +658,46 @@ if not current_elo_df.empty:
             if st.button("Add Round"):
                 st.session_state.custom_rounds.append([])
             
+            # Use a separate button to clear the bracket
+            if st.button("Clear Bracket"):
+                st.session_state.custom_rounds = []
+                st.rerun()
+
             for i, round_matchups in enumerate(st.session_state.custom_rounds):
                 st.markdown(f"--- \n#### Round {i+1}")
                 
                 if st.button(f"Add Matchup to Round {i+1}", key=f"add_match_r{i}"):
-                    round_matchups.append((None, None))
+                    # Append a dictionary to store all matchup details
+                    round_matchups.append({'team_a': None, 'team_b': None, 'is_two_legged': False, 'leg1_a': 0, 'leg1_b': 0})
                 
                 # Generate options for dropdowns
                 options = selected_teams.copy()
                 if i > 0:
-                    for r_idx, r_matchups in enumerate(st.session_state.custom_rounds[:i]):
-                        for m_idx in range(len(r_matchups)):
+                    for r_idx, r_matchups_prev in enumerate(st.session_state.custom_rounds[:i]):
+                        for m_idx in range(len(r_matchups_prev)):
                             options.append(f"Winner of M{r_idx+1}.{m_idx+1}")
                             options.append(f"Loser of M{r_idx+1}.{m_idx+1}")
 
-                for j, matchup in enumerate(round_matchups):
-                    cols = st.columns(2)
-                    team1 = cols[0].selectbox(f"Match {j+1} - Team A", options=options, key=f"r{i}_m{j}_tA", index=None)
-                    team2 = cols[1].selectbox(f"Match {j+1} - Team B", options=options, key=f"r{i}_m{j}_tB", index=None)
-                    st.session_state.custom_rounds[i][j] = (team1, team2)
+                for j, matchup_details in enumerate(round_matchups):
+                    cols = st.columns([3, 3, 2])
+                    with cols[0]:
+                        matchup_details['team_a'] = st.selectbox(f"Match {j+1} - Team A", options=options, key=f"r{i}_m{j}_tA", index=None, placeholder="Select Team A")
+                    with cols[1]:
+                        matchup_details['team_b'] = st.selectbox(f"Match {j+1} - Team B", options=options, key=f"r{i}_m{j}_tB", index=None, placeholder="Select Team B")
+                    
+                    with cols[2]:
+                        st.write("") # Spacer
+                        st.write("") # Spacer
+                        matchup_details['is_two_legged'] = st.checkbox("2-Legged Tie?", key=f"r{i}_m{j}_2leg")
+
+                    if matchup_details['is_two_legged']:
+                        score_cols = st.columns([1,1,4])
+                        with score_cols[0]:
+                            matchup_details['leg1_a'] = st.number_input("Leg 1 Score A", min_value=0, step=1, key=f"r{i}_m{j}_sA")
+                        with score_cols[1]:
+                            matchup_details['leg1_b'] = st.number_input("Leg 1 Score B", min_value=0, step=1, key=f"r{i}_m{j}_sB")
+                    st.markdown("---")
+
 
         first_round_matchups = []
         manual_matchups_valid = True
@@ -679,11 +729,21 @@ if not current_elo_df.empty:
                 st.warning("Please select at least two teams.")
 
             elif tournament_format == "Custom Knockout":
-                # Validate that all matchups are filled
-                is_valid_bracket = all(all(matchup) for round_matchups in st.session_state.custom_rounds for matchup in round_matchups)
+                is_valid_bracket = all(
+                    matchup['team_a'] is not None and matchup['team_b'] is not None
+                    for round_matchups in st.session_state.custom_rounds
+                    for matchup in round_matchups
+                )
+
                 if st.session_state.custom_rounds and is_valid_bracket:
-                    knockout_teams_df = current_elo_df.loc[selected_teams][['elo']].copy()
-                    custom_knockout_results = run_custom_knockout_simulation(knockout_teams_df, num_knockout_sims, st.session_state.custom_rounds)
+                    # We need to get all unique teams selected in the first round to pass to the simulation
+                    first_round_teams = set()
+                    for matchup in st.session_state.custom_rounds[0]:
+                        if ' of ' not in matchup['team_a']: first_round_teams.add(matchup['team_a'])
+                        if ' of ' not in matchup['team_b']: first_round_teams.add(matchup['team_b'])
+                    
+                    knockout_teams_df = current_elo_df.loc[list(first_round_teams)][['elo']].copy()
+                    custom_knockout_results = run_custom_knockout_simulation(knockout_teams_df, num_knockout_sims, st.session_state.custom_rounds, hfa_to_apply)
                     
                     st.subheader("Tournament Win Probability")
                     if display_format == "Decimal Odds":
