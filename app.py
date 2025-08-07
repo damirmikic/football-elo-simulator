@@ -655,22 +655,23 @@ if not current_elo_df.empty:
         if tournament_format == "Custom Knockout":
             st.subheader("Build Your Custom Bracket")
             
-            if st.button("Add Round"):
-                st.session_state.custom_rounds.append([])
-            
-            # Use a separate button to clear the bracket
-            if st.button("Clear Bracket"):
-                st.session_state.custom_rounds = []
-                st.rerun()
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Add Round"):
+                    st.session_state.custom_rounds.append([])
+                    st.rerun()
+            with col2:
+                if st.button("Clear Bracket"):
+                    st.session_state.custom_rounds = []
+                    st.rerun()
 
             for i, round_matchups in enumerate(st.session_state.custom_rounds):
                 st.markdown(f"--- \n#### Round {i+1}")
                 
                 if st.button(f"Add Matchup to Round {i+1}", key=f"add_match_r{i}"):
-                    # Append a dictionary to store all matchup details
-                    round_matchups.append({'team_a': None, 'team_b': None, 'is_two_legged': False, 'leg1_a': 0, 'leg1_b': 0})
+                    st.session_state.custom_rounds[i].append({'team_a': None, 'team_b': None, 'is_two_legged': False, 'leg1_a': 0, 'leg1_b': 0})
+                    st.rerun()
                 
-                # Generate options for dropdowns
                 options = selected_teams.copy()
                 if i > 0:
                     for r_idx, r_matchups_prev in enumerate(st.session_state.custom_rounds[:i]):
@@ -678,24 +679,37 @@ if not current_elo_df.empty:
                             options.append(f"Winner of M{r_idx+1}.{m_idx+1}")
                             options.append(f"Loser of M{r_idx+1}.{m_idx+1}")
 
+                options_with_placeholder = [None] + sorted(list(set(options)))
+
                 for j, matchup_details in enumerate(round_matchups):
                     cols = st.columns([3, 3, 2])
+                    
                     with cols[0]:
-                        matchup_details['team_a'] = st.selectbox(f"Match {j+1} - Team A", options=options, key=f"r{i}_m{j}_tA", index=None, placeholder="Select Team A")
+                        current_val_a = matchup_details.get('team_a')
+                        index_a = options_with_placeholder.index(current_val_a) if current_val_a in options_with_placeholder else 0
+                        selected_a = st.selectbox(f"Match {j+1} - Team A", options=options_with_placeholder, key=f"r{i}_m{j}_tA", index=index_a, format_func=lambda x: "Select Team A" if x is None else x)
+                        matchup_details['team_a'] = selected_a
+
                     with cols[1]:
-                        matchup_details['team_b'] = st.selectbox(f"Match {j+1} - Team B", options=options, key=f"r{i}_m{j}_tB", index=None, placeholder="Select Team B")
+                        current_val_b = matchup_details.get('team_b')
+                        index_b = options_with_placeholder.index(current_val_b) if current_val_b in options_with_placeholder else 0
+                        selected_b = st.selectbox(f"Match {j+1} - Team B", options=options_with_placeholder, key=f"r{i}_m{j}_tB", index=index_b, format_func=lambda x: "Select Team B" if x is None else x)
+                        matchup_details['team_b'] = selected_b
                     
                     with cols[2]:
-                        st.write("") # Spacer
-                        st.write("") # Spacer
-                        matchup_details['is_two_legged'] = st.checkbox("2-Legged Tie?", key=f"r{i}_m{j}_2leg")
+                        st.write("") 
+                        st.write("") 
+                        is_two_legged = st.checkbox("2-Legged Tie?", key=f"r{i}_m{j}_2leg", value=matchup_details.get('is_two_legged', False))
+                        matchup_details['is_two_legged'] = is_two_legged
 
-                    if matchup_details['is_two_legged']:
+                    if is_two_legged:
                         score_cols = st.columns([1,1,4])
                         with score_cols[0]:
-                            matchup_details['leg1_a'] = st.number_input("Leg 1 Score A", min_value=0, step=1, key=f"r{i}_m{j}_sA")
+                            leg1_a = st.number_input("Leg 1 Score A", min_value=0, step=1, key=f"r{i}_m{j}_sA", value=matchup_details.get('leg1_a', 0))
+                            matchup_details['leg1_a'] = leg1_a
                         with score_cols[1]:
-                            matchup_details['leg1_b'] = st.number_input("Leg 1 Score B", min_value=0, step=1, key=f"r{i}_m{j}_sB")
+                            leg1_b = st.number_input("Leg 1 Score B", min_value=0, step=1, key=f"r{i}_m{j}_sB", value=matchup_details.get('leg1_b', 0))
+                            matchup_details['leg1_b'] = leg1_b
                     st.markdown("---")
 
 
@@ -736,22 +750,27 @@ if not current_elo_df.empty:
                 )
 
                 if st.session_state.custom_rounds and is_valid_bracket:
-                    # We need to get all unique teams selected in the first round to pass to the simulation
-                    first_round_teams = set()
-                    for matchup in st.session_state.custom_rounds[0]:
-                        if ' of ' not in matchup['team_a']: first_round_teams.add(matchup['team_a'])
-                        if ' of ' not in matchup['team_b']: first_round_teams.add(matchup['team_b'])
                     
-                    knockout_teams_df = current_elo_df.loc[list(first_round_teams)][['elo']].copy()
-                    custom_knockout_results = run_custom_knockout_simulation(knockout_teams_df, num_knockout_sims, st.session_state.custom_rounds, hfa_to_apply)
+                    all_teams_in_bracket = set()
+                    for round_matchups in st.session_state.custom_rounds:
+                        for matchup in round_matchups:
+                            if ' of ' not in matchup['team_a']: all_teams_in_bracket.add(matchup['team_a'])
+                            if ' of ' not in matchup['team_b']: all_teams_in_bracket.add(matchup['team_b'])
                     
-                    st.subheader("Tournament Win Probability")
-                    if display_format == "Decimal Odds":
-                        custom_knockout_results = custom_knockout_results.apply(lambda p: 1/p if p > 0 else np.nan)
-                        st.dataframe(custom_knockout_results.to_frame(name="Decimal Odds").style.format("{:.2f}", na_rep="-"))
+                    if not all(team in current_elo_df.index for team in all_teams_in_bracket if team is not None):
+                        st.error("One or more teams in the bracket could not be found in the Elo database. Please check the names.")
                     else:
-                        st.dataframe(custom_knockout_results.to_frame(name="Win Probability").style.format("{:.1%}"))
-                    st.bar_chart(custom_knockout_results)
+                        teams_to_fetch = [team for team in all_teams_in_bracket if team is not None]
+                        knockout_teams_df = current_elo_df.loc[teams_to_fetch][['elo']].copy()
+                        custom_knockout_results = run_custom_knockout_simulation(knockout_teams_df, num_knockout_sims, st.session_state.custom_rounds, hfa_to_apply)
+                        
+                        st.subheader("Tournament Win Probability")
+                        if display_format == "Decimal Odds":
+                            custom_knockout_results = custom_knockout_results.apply(lambda p: 1/p if p > 0 else np.nan)
+                            st.dataframe(custom_knockout_results.to_frame(name="Decimal Odds").style.format("{:.2f}", na_rep="-"))
+                        else:
+                            st.dataframe(custom_knockout_results.to_frame(name="Win Probability").style.format("{:.1%}"))
+                        st.bar_chart(custom_knockout_results)
                 else:
                     st.error("Please ensure all matchups in your custom bracket are filled before running the simulation.")
 
