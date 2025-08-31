@@ -447,7 +447,6 @@ if not current_elo_df.empty:
             team_b_name = st.selectbox("Select Away Team (Leg 1)", options=all_club_names, index=all_club_names.index("Real Madrid") if "Real Madrid" in all_club_names else 1)
 
         if team_a_name and team_b_name:
-            #... (Ovaj deo ostaje nepromenjen)
             elo_a, elo_b, header_text, error_found = None, None, "", False
             if calculation_mode == "Current Ratings":
                 header_text = "Match Prediction (Based on Current Ratings)"
@@ -485,17 +484,141 @@ if not current_elo_df.empty:
                     final_prob_a = prob_a_prog_outright + (prob_extra_time * 0.5)
                     final_prob_b = prob_b_prog_outright + (prob_extra_time * 0.5)
                     st.subheader("Pre-Match Progression Probability")
-                    # ... ostatak koda za dvomeč ostaje isti
+                    prog_col1, prog_col2 = st.columns(2, gap="medium")
+                    with prog_col1:
+                        with st.container(border=True):
+                            if st.button(f"{team_a_name} Progresses", key="team_a_progress"): st.session_state.selected_team = team_a_name
+                            st.markdown(f"<p style='text-align: center; font-size: 0.9em;'>Elo: {elo_a:.0f}</p>", unsafe_allow_html=True)
+                            if display_format == "Probabilities": st.progress(final_prob_a)
+                            st.markdown(f"<h4 style='text-align: center;'>{format_value(final_prob_a, display_format)}</h4>", unsafe_allow_html=True)
+                    with prog_col2:
+                        with st.container(border=True):
+                            if st.button(f"{team_b_name} Progresses", key="team_b_progress"): st.session_state.selected_team = team_b_name
+                            st.markdown(f"<p style='text-align: center; font-size: 0.9em;'>Elo: {elo_b:.0f}</p>", unsafe_allow_html=True)
+                            if display_format == "Probabilities": st.progress(final_prob_b)
+                            st.markdown(f"<h4 style='text-align: center;'>{format_value(final_prob_b, display_format)}</h4>", unsafe_allow_html=True)
+                    
+                    st.divider()
+                    st.subheader(f"Leg 2 Outcome: {team_b_name} (Home) vs. {team_a_name} (Away)")
+                    display_outcome_cards(team_b_name, team_a_name, p_b_wins_leg2, p_draw_leg2, p_a_wins_leg2, elo_b, elo_a, display_format, draw_label="Draw Leg 2")
 
+                    if st.checkbox("Enter First Leg Result"):
+                        score_col1, score_col2 = st.columns(2)
+                        leg1_a_score = score_col1.number_input(f"{team_a_name} (Home) Score", min_value=0, step=1)
+                        leg1_b_score = score_col2.number_input(f"{team_b_name} (Away) Score", min_value=0, step=1)
+                        
+                        num_h2h_sims = 10000
+                        team_a_progress_count = 0
+                        for _ in range(num_h2h_sims):
+                            result = np.random.choice(['H', 'D', 'A'], p=[p_b_wins_leg2, p_draw_leg2, p_a_wins_leg2])
+                            if result == 'H': leg2_b_score, leg2_a_score = 1, 0
+                            elif result == 'D': leg2_b_score, leg2_a_score = 1, 1
+                            else: leg2_b_score, leg2_a_score = 0, 1
+                            
+                            agg_a = leg1_a_score + leg2_a_score
+                            agg_b = leg1_b_score + leg2_b_score
+                            
+                            if agg_a > agg_b: team_a_progress_count += 1
+                            elif agg_a == agg_b:
+                                if np.random.rand() > 0.5: team_a_progress_count += 1
+                        
+                        live_prob_a = team_a_progress_count / num_h2h_sims
+                        live_prob_b = 1 - live_prob_a
+
+                        st.subheader("Live Progression Probability (after Leg 1)")
+                        live_prog_col1, live_prog_col2 = st.columns(2, gap="medium")
+                        with live_prog_col1:
+                            st.metric(f"{team_a_name} to Progress", f"{live_prob_a:.1%}")
+                        with live_prog_col2:
+                            st.metric(f"{team_b_name} to Progress", f"{live_prob_b:.1%}")
+
+            if st.session_state.selected_team and calculation_mode == "Historical Ratings":
+                st.divider()
+                st.header(f"Historical Elo Rating for {st.session_state.selected_team}")
+                team_history = load_team_history(st.session_state.selected_team)
+                if team_history is not None and not team_history.empty: st.line_chart(team_history['elo'])
+    
     with tab2:
-        # ... (Ovaj tab ostaje nepromenjen)
         st.header(f"League Simulation: {selected_league}")
         
         sim_col1, sim_col2 = st.columns(2)
         with sim_col1:
             num_sims = st.number_input("Number of simulations:", min_value=10, max_value=10000, value=100, step=10, key="league_sims")
-        # ... ostatak koda za simulaciju lige ostaje isti
+        with sim_col2:
+            league_format = st.selectbox("League Format:", ["Standard Round Robin", "Round Robin with Playoff", "Standard + Split", "Three Round Robin + Split"])
+        
+        playoff_teams_count = 0
+        split_teams_count = 0
+        post_split_format = "Double Round Robin"
+        if league_format == "Round Robin with Playoff":
+            playoff_teams_count = st.slider("Number of playoff teams:", min_value=2, max_value=8, value=4, step=2)
+        elif "Split" in league_format:
+            split_teams_count = st.slider("Number of teams in Championship group:", min_value=4, max_value=10, value=6, step=1)
+            post_split_format = st.radio("Post-Split Format:", ["Single Round Robin", "Double Round Robin"], horizontal=True)
 
+        with st.expander("Customize Participants and Ratings"):
+            initial_sim_teams = league_club_names.copy()
+            sim_participants = st.multiselect("Select teams for the simulation", options=all_club_names, default=initial_sim_teams, key="league_participants")
+            
+            if sim_participants:
+                sim_teams_df = current_elo_df.loc[sim_participants][['elo']].copy()
+                st.write("Edit Elo ratings below:")
+                edited_teams_df = st.data_editor(sim_teams_df, column_config={"elo": st.column_config.NumberColumn("Elo Rating", min_value=1000, max_value=2500, step=10, format="%d")}, key="league_sim_editor")
+            else:
+                edited_teams_df = pd.DataFrame(columns=['elo'])
+
+        num_teams_in_league = len(edited_teams_df)
+        st.metric("Number of Teams in Simulation", num_teams_in_league)
+
+        matches_info = ""
+        if league_format in ["Standard Round Robin", "Round Robin with Playoff"]:
+            matches_per_team = (num_teams_in_league - 1) * 2
+            matches_info = f"Each team plays **{matches_per_team}** matches in the regular season."
+            if league_format == "Round Robin with Playoff":
+                matches_info += f" Top {playoff_teams_count} teams advance to a knockout playoff."
+        elif "Split" in league_format:
+            if league_format == "Standard + Split":
+                reg_season_matches = (num_teams_in_league - 1) * 2
+            else:
+                reg_season_matches = (num_teams_in_league - 1) * 3
+            
+            if post_split_format == "Double Round Robin":
+                champ_group_matches = (split_teams_count - 1) * 2
+                relegation_group_size = num_teams_in_league - split_teams_count
+                relegation_group_matches = (relegation_group_size - 1) * 2
+            else:
+                champ_group_matches = split_teams_count - 1
+                relegation_group_size = num_teams_in_league - split_teams_count
+                relegation_group_matches = relegation_group_size - 1
+
+            matches_info = (f"Regular season: **{reg_season_matches}** matches per team.\n\n"
+                            f"After split, top {split_teams_count} teams play **{champ_group_matches}** more matches.\n\n"
+                            f"Bottom {relegation_group_size} teams play **{relegation_group_matches}** more matches.")
+        st.info(matches_info)
+
+        if st.button("Run Simulation", key="run_league_sim"):
+            if calculation_mode == "Current Ratings":
+                if not edited_teams_df.empty:
+                    results = run_league_simulation(edited_teams_df, num_sims, hfa_to_apply, league_format, playoff_teams_count, split_teams_count, post_split_format)
+                    position_cols = [col for col in results.columns if col not in ['Expected Pts', 'Champion %']]
+                    
+                    if display_format == "Decimal Odds":
+                        display_df = results.copy()
+                        for col in position_cols:
+                            display_df[col] = display_df[col].apply(lambda p: 1/p if p > 0 else np.nan)
+                        if 'Champion %' in display_df.columns:
+                             display_df['Champion %'] = display_df['Champion %'].apply(lambda p: 1/p if p > 0 else np.nan)
+                        st.dataframe(display_df.style.format("{:.2f}", na_rep="-"))
+                    else:
+                        format_dict = {'Expected Pts': '{:.2f}'}
+                        if 'Champion %' in results.columns:
+                            format_dict['Champion %'] = '{:.1%}'
+                        st.dataframe(results.style.background_gradient(cmap='Greens', subset=position_cols).format("{:.1%}").format(format_dict))
+                else:
+                    st.warning("Please select/confirm teams in the customization section before running.")
+            else:
+                st.warning("League simulation is only available for 'Current Ratings' mode.")
+    
     # --- NOVI TAB ZA UEFA SIMULACIJU ---
     with tab4:
         st.header("UEFA Competition Simulation (New Format)")
@@ -545,7 +668,7 @@ if not current_elo_df.empty:
                         
                         if all_mapped:
                             st.success("All names have been mapped!")
-                            if st.button("Run Simulation with Mapped Names"):
+                            if st.button("Run Simulation with Mapped Names", key="run_uefa_sim_mapped"):
                                 corrected_fixtures = [
                                     (st.session_state.corrections.get(h, h), st.session_state.corrections.get(a, a))
                                     for h, a in csv_fixtures
@@ -558,7 +681,7 @@ if not current_elo_df.empty:
 
                     else: # Sva imena se poklapaju
                         st.success("All team names from the file are valid.")
-                        if st.button("Run Simulation"):
+                        if st.button("Run Simulation", key="run_uefa_sim_valid"):
                             simulation_teams = all_csv_teams
                             sim_teams_df = current_elo_df.loc[list(simulation_teams)][['elo']].copy()
                             results = run_uefa_simulation(sim_teams_df, csv_fixtures, num_uefa_sims, hfa_to_apply)
@@ -569,9 +692,70 @@ if not current_elo_df.empty:
 
 
     with tab3:
-        # ... (Ovaj tab ostaje nepromenjen)
         st.header("Custom Tournament Simulation")
-        # ... ostatak koda za custom turnir ostaje isti
+        
+        tournament_format = st.selectbox("Tournament Format:", ["Single Elimination Knockout", "Single Round Robin", "Double Round Robin"])
+        
+        selected_teams = st.multiselect("Select Teams:", options=all_club_names, key="custom_teams_select")
+        
+        num_knockout_sims = st.number_input("Number of tournament simulations:", min_value=10, max_value=10000, value=1000, step=100, key="custom_sims")
+
+        first_round_matchups = []
+        manual_matchups_valid = True
+        if tournament_format == "Single Elimination Knockout":
+            num_teams = len(selected_teams)
+            if num_teams > 1 and (num_teams & (num_teams - 1) == 0):
+                manual_matchups = st.checkbox("Manually set first-round matchups")
+                if manual_matchups:
+                    st.write("Define First Round Matchups:")
+                    for i in range(num_teams // 2):
+                        cols = st.columns(2)
+                        team1 = cols[0].selectbox(f"Match {i+1} - Team A", options=selected_teams, key=f"m{i}_tA", index=None)
+                        team2 = cols[1].selectbox(f"Match {i+1} - Team B", options=selected_teams, key=f"m{i}_tB", index=None)
+                        if team1 and team2:
+                            first_round_matchups.append((team1, team2))
+                    
+                    all_matchup_teams = [team for pair in first_round_matchups for team in pair]
+                    if len(all_matchup_teams) != num_teams and len(first_round_matchups) == num_teams // 2:
+                         st.warning("Please assign all selected teams to a matchup.")
+                         manual_matchups_valid = False
+                    elif len(set(all_matchup_teams)) != len(all_matchup_teams):
+                        counts = Counter(all_matchup_teams)
+                        duplicates = [team for team, count in counts.items() if count > 1]
+                        st.error(f"Each team can only be in one matchup. Duplicates found: {', '.join(duplicates)}")
+                        manual_matchups_valid = False
+
+        if st.button("Run Custom Simulation", key="run_custom_sim"):
+            if not selected_teams:
+                st.warning("Please select at least two teams.")
+            elif tournament_format == "Single Elimination Knockout":
+                num_teams = len(selected_teams)
+                if num_teams > 1 and (num_teams & (num_teams - 1) == 0):
+                    if not manual_matchups:
+                        shuffled_teams = selected_teams.copy()
+                        np.random.shuffle(shuffled_teams)
+                        first_round_matchups = [(shuffled_teams[j], shuffled_teams[j+1]) for j in range(0, num_teams, 2)]
+
+                    if manual_matchups_valid:
+                        knockout_teams_df = current_elo_df.loc[selected_teams][['elo']].copy()
+                        knockout_results = run_knockout_simulation(knockout_teams_df, num_knockout_sims, first_round_matchups)
+                        
+                        st.subheader("Tournament Win Probability")
+                        if display_format == "Decimal Odds":
+                            knockout_results = knockout_results.apply(lambda p: 1/p if p > 0 else np.nan)
+                            st.dataframe(knockout_results.to_frame(name="Decimal Odds").style.format("{:.2f}", na_rep="-"))
+                        else:
+                            st.dataframe(knockout_results.to_frame(name="Win Probability").style.format("{:.1%}"))
+                        st.bar_chart(knockout_results)
+                else:
+                    st.error("Please select a number of teams that is a power of 2 (e.g., 4, 8, 16, 32) for a knockout tournament.")
+            else: 
+                robin_format = "Single" if tournament_format == "Single Round Robin" else "Double"
+                round_robin_teams_df = current_elo_df.loc[selected_teams][['elo']].copy()
+                round_robin_results = run_round_robin_simulation(round_robin_teams_df, num_knockout_sims, hfa_to_apply, robin_format)
+                
+                st.subheader("Simulated Round Robin Results")
+                st.dataframe(round_robin_results.to_frame(name="Average Points").style.format("{:.2f}"))
 
 
 else:
@@ -579,3 +763,4 @@ else:
 
 st.sidebar.markdown("---")
 st.sidebar.info("Data from ClubElo.com via `soccerdata`.")
+
