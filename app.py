@@ -95,8 +95,15 @@ def run_league_simulation(league_teams_df, num_simulations, hfa_value, league_fo
     initial_points = league_teams_df['current_points'].to_dict()
     
     position_counts = {team: {pos: 0 for pos in range(1, num_teams + 1)} for team in teams}
-    total_points = {team: 0 for team in teams}
+    total_points_agg = {team: 0 for team in teams}
     playoff_champions = {team: 0 for team in teams}
+
+    detailed_results = {
+        'points': {team: [] for team in teams},
+        'wins': {team: [] for team in teams},
+        'draws': {team: [] for team in teams},
+        'losses': {team: [] for team in teams}
+    }
     
     status_text = st.empty()
     progress_bar = st.progress(0)
@@ -106,6 +113,9 @@ def run_league_simulation(league_teams_df, num_simulations, hfa_value, league_fo
         
         sim_elos = initial_elos.copy()
         sim_points = initial_points.copy()
+        sim_wins = {team: 0 for team in teams}
+        sim_draws = {team: 0 for team in teams}
+        sim_losses = {team: 0 for team in teams}
 
         if league_format == "Three Round Robin + Split":
             initial_fixtures = list(itertools.permutations(teams, 2)) * 3
@@ -119,13 +129,19 @@ def run_league_simulation(league_teams_df, num_simulations, hfa_value, league_fo
             
             if result == 'H':
                 sim_points[home_team] += 3
+                sim_wins[home_team] += 1
+                sim_losses[away_team] += 1
                 actual_home_score = 1.0
             elif result == 'D':
                 sim_points[home_team] += 1
                 sim_points[away_team] += 1
+                sim_draws[home_team] += 1
+                sim_draws[away_team] += 1
                 actual_home_score = 0.5
             else:
                 sim_points[away_team] += 3
+                sim_wins[away_team] += 1
+                sim_losses[home_team] += 1
                 actual_home_score = 0.0
                 
             expected_home_score = 1 / (1 + 10**((elo_away - (elo_home + hfa_value)) / 400))
@@ -152,14 +168,31 @@ def run_league_simulation(league_teams_df, num_simulations, hfa_value, league_fo
                     elo_home, elo_away = sim_elos[home_team], sim_elos[away_team]
                     p_home, p_draw, p_away = calculate_single_match_probs(elo_home, elo_away, hfa_value)
                     result = np.random.choice(['H', 'D', 'A'], p=[p_home, p_draw, p_away])
-                    if result == 'H': sim_points[home_team] += 3
-                    elif result == 'D': sim_points[home_team] += 1; sim_points[away_team] += 1
-                    else: sim_points[away_team] += 3
+                    if result == 'H':
+                        sim_points[home_team] += 3
+                        sim_wins[home_team] += 1
+                        sim_losses[away_team] += 1
+                    elif result == 'D':
+                        sim_points[home_team] += 1
+                        sim_points[away_team] += 1
+                        sim_draws[home_team] += 1
+                        sim_draws[away_team] += 1
+                    else:
+                        sim_points[away_team] += 3
+                        sim_wins[away_team] += 1
+                        sim_losses[home_team] += 1
             
         final_standings = pd.Series(sim_points).sort_values(ascending=False)
         for pos, team in enumerate(final_standings.index, 1):
             position_counts[team][pos] += 1
-            total_points[team] += final_standings[team]
+            total_points_agg[team] += final_standings[team]
+
+        # Sačuvaj detaljne rezultate za ovu simulaciju
+        for team in teams:
+            detailed_results['points'][team].append(sim_points[team])
+            detailed_results['wins'][team].append(sim_wins[team])
+            detailed_results['draws'][team].append(sim_draws[team])
+            detailed_results['losses'][team].append(sim_losses[team])
 
         if league_format == "Round Robin with Playoff":
             playoff_teams_list = final_standings.head(playoff_teams).index.tolist()
@@ -177,7 +210,7 @@ def run_league_simulation(league_teams_df, num_simulations, hfa_value, league_fo
     status_text.success("Simulation complete!")
     
     results_df = pd.DataFrame.from_dict(position_counts, orient='index')
-    results_df['Expected Pts'] = [total_points[team] / num_simulations for team in teams]
+    results_df['Expected Pts'] = [total_points_agg[team] / num_simulations for team in teams]
     
     for pos in range(1, num_teams + 1):
         results_df[pos] = results_df[pos] / num_simulations
@@ -186,7 +219,8 @@ def run_league_simulation(league_teams_df, num_simulations, hfa_value, league_fo
         results_df['Champion %'] = pd.Series(playoff_champions) / num_simulations
 
     results_df.columns = [f"{col}" for col in results_df.columns]
-    return results_df.sort_values(by='Expected Pts', ascending=False)
+    
+    return results_df.sort_values(by='Expected Pts', ascending=False), detailed_results
 
 def run_knockout_simulation(teams_df, num_simulations, first_round_matchups):
     """Simulira nokaut turnir sa definisanim parovima prve runde."""
@@ -351,7 +385,7 @@ def run_uefa_simulation(teams_df, fixtures_df, num_simulations, hfa_value):
     all_teams = list(initial_elos.keys())
     
     # Inicijalizacija brojača
-    total_points = {team: 0 for team in all_teams}
+    total_points_agg = {team: 0 for team in all_teams}
     rank_sum = {team: 0 for team in all_teams}
     league_phase_winners = {team: 0 for team in all_teams}
     top_8_counts = {team: 0 for team in all_teams}
@@ -363,6 +397,13 @@ def run_uefa_simulation(teams_df, fixtures_df, num_simulations, hfa_value):
     sf_counts = {team: 0 for team in all_teams}
     final_counts = {team: 0 for team in all_teams}
     tournament_winners = {team: 0 for team in all_teams}
+    
+    detailed_results = {
+        'points': {team: [] for team in all_teams},
+        'wins': {team: [] for team in all_teams},
+        'draws': {team: [] for team in all_teams},
+        'losses': {team: [] for team in all_teams}
+    }
 
     status_text = st.empty()
     progress_bar = st.progress(0)
@@ -372,6 +413,9 @@ def run_uefa_simulation(teams_df, fixtures_df, num_simulations, hfa_value):
         
         sim_elos = initial_elos.copy()
         sim_points = {team: 0 for team in all_teams}
+        sim_wins = {team: 0 for team in all_teams}
+        sim_draws = {team: 0 for team in all_teams}
+        sim_losses = {team: 0 for team in all_teams}
 
         # Faza 1: Ligaški deo
         for _, row in fixtures_df.iterrows():
@@ -384,13 +428,19 @@ def run_uefa_simulation(teams_df, fixtures_df, num_simulations, hfa_value):
                 
                 if home_score > away_score:
                     sim_points[home_team] += 3
+                    sim_wins[home_team] += 1
+                    sim_losses[away_team] += 1
                     actual_home_score = 1.0
                 elif home_score < away_score:
                     sim_points[away_team] += 3
+                    sim_wins[away_team] += 1
+                    sim_losses[home_team] += 1
                     actual_home_score = 0.0
                 else:
                     sim_points[home_team] += 1
                     sim_points[away_team] += 1
+                    sim_draws[home_team] += 1
+                    sim_draws[away_team] += 1
                     actual_home_score = 0.5
                 
                 # Ažuriraj Elo rejtinge na osnovu stvarnog rezultata
@@ -404,9 +454,19 @@ def run_uefa_simulation(teams_df, fixtures_df, num_simulations, hfa_value):
                 elo_home, elo_away = sim_elos.get(home_team, 1500), sim_elos.get(away_team, 1500)
                 p_home, p_draw, p_away = calculate_single_match_probs(elo_home, elo_away, hfa_value)
                 result = np.random.choice(['H', 'D', 'A'], p=[p_home, p_draw, p_away])
-                if result == 'H': sim_points[home_team] += 3
-                elif result == 'D': sim_points[home_team] += 1; sim_points[away_team] += 1
-                else: sim_points[away_team] += 3
+                if result == 'H':
+                    sim_points[home_team] += 3
+                    sim_wins[home_team] += 1
+                    sim_losses[away_team] += 1
+                elif result == 'D':
+                    sim_points[home_team] += 1
+                    sim_points[away_team] += 1
+                    sim_draws[home_team] += 1
+                    sim_draws[away_team] += 1
+                else:
+                    sim_points[away_team] += 3
+                    sim_wins[away_team] += 1
+                    sim_losses[home_team] += 1
         
         league_standings = pd.Series(sim_points).sort_values(ascending=False)
         
@@ -414,12 +474,18 @@ def run_uefa_simulation(teams_df, fixtures_df, num_simulations, hfa_value):
         if not league_standings.empty:
             league_phase_winners[league_standings.index[0]] += 1
         for rank, team in enumerate(league_standings.index):
-            total_points[team] += league_standings[team]
+            total_points_agg[team] += league_standings[team]
             rank_sum[team] += rank + 1
             if rank < 8: top_8_counts[team] += 1
             if rank < 16: top_16_counts[team] += 1
             if rank < 24: top_24_counts[team] += 1
             if 8 <= rank < 24: playoff_counts[team] += 1
+        
+        for team in all_teams:
+            detailed_results['points'][team].append(sim_points[team])
+            detailed_results['wins'][team].append(sim_wins[team])
+            detailed_results['draws'][team].append(sim_draws[team])
+            detailed_results['losses'][team].append(sim_losses[team])
 
         # Faza 2: Baraž
         top_8_teams = league_standings.head(8).index.tolist()
@@ -469,7 +535,7 @@ def run_uefa_simulation(teams_df, fixtures_df, num_simulations, hfa_value):
 
     # Kreiranje finalnog DataFrame-a
     results_df = pd.DataFrame(index=all_teams)
-    results_df['avg_pts'] = pd.Series(total_points) / num_simulations
+    results_df['avg_pts'] = pd.Series(total_points_agg) / num_simulations
     results_df['avg_rank'] = pd.Series(rank_sum) / num_simulations
     results_df['Win League Phase'] = pd.Series(league_phase_winners) / num_simulations
     results_df['Top 8 (League)'] = pd.Series(top_8_counts) / num_simulations
@@ -482,7 +548,7 @@ def run_uefa_simulation(teams_df, fixtures_df, num_simulations, hfa_value):
     results_df['Reach Final'] = pd.Series(final_counts) / num_simulations
     results_df['Winner'] = pd.Series(tournament_winners) / num_simulations
     
-    return results_df.sort_values(by='Winner', ascending=False)
+    return results_df.sort_values(by='Winner', ascending=False), detailed_results
 
 # --- Pomoćne funkcije za UI ---
 def format_value(prob, display_format):
@@ -776,21 +842,43 @@ if not current_elo_df.empty:
                 st.warning("League simulation is only available for 'Current Ratings' mode.")
         
         if st.session_state.league_sim_results is not None:
-            results = st.session_state.league_sim_results
-            position_cols = [col for col in results.columns if col not in ['Expected Pts', 'Champion %']]
+            results_df, detailed_results = st.session_state.league_sim_results
+            st.dataframe(results_df)
+
+            st.markdown("---")
+            st.header("Detailed Team Analysis")
             
-            if display_format == "Decimal Odds":
-                display_df = results.copy()
-                for col in position_cols:
-                    display_df[col] = display_df[col].apply(lambda p: 1/p if p > 0 else np.nan)
-                if 'Champion %' in display_df.columns:
-                     display_df['Champion %'] = display_df['Champion %'].apply(lambda p: 1/p if p > 0 else np.nan)
-                st.dataframe(display_df.style.format("{:.2f}", na_rep="-"))
-            else:
-                format_dict = {'Expected Pts': '{:.2f}'}
-                if 'Champion %' in results.columns:
-                    format_dict['Champion %'] = '{:.1%}'
-                st.dataframe(results.style.background_gradient(cmap='Greens', subset=position_cols).format("{:.1%}").format(format_dict))
+            selected_team_analysis = st.selectbox("Select a team for detailed analysis:", options=results_df.index.tolist(), key="league_team_select")
+
+            if selected_team_analysis:
+                st.subheader(f"Expected Outcomes for {selected_team_analysis}")
+                
+                avg_wins = np.mean(detailed_results['wins'][selected_team_analysis])
+                avg_draws = np.mean(detailed_results['draws'][selected_team_analysis])
+                avg_losses = np.mean(detailed_results['losses'][selected_team_analysis])
+
+                an_col1, an_col2, an_col3 = st.columns(3)
+                an_col1.metric("Expected Wins", f"{avg_wins:.2f}")
+                an_col2.metric("Expected Draws", f"{avg_draws:.2f}")
+                an_col3.metric("Expected Losses", f"{avg_losses:.2f}")
+
+                st.subheader(f"Points Probability for {selected_team_analysis}")
+                target_pts = st.number_input("Target Points:", min_value=0, value=int(results_df.loc[selected_team_analysis]['Expected Pts']), step=1, key="league_pts_input")
+                
+                points_array = np.array(detailed_results['points'][selected_team_analysis])
+                total_sims = len(points_array)
+                
+                prob_over = np.sum(points_array > target_pts) / total_sims
+                prob_under = np.sum(points_array < target_pts) / total_sims
+                prob_exact = np.sum(points_array == target_pts) / total_sims
+
+                pts_col1, pts_col2, pts_col3 = st.columns(3)
+                with pts_col1:
+                    st.metric(f"Over {target_pts} Points", format_value(prob_over, display_format))
+                with pts_col2:
+                    st.metric(f"Under {target_pts} Points", format_value(prob_under, display_format))
+                with pts_col3:
+                    st.metric(f"Exactly {target_pts} Points", format_value(prob_exact, display_format))
 
 
     # --- AŽURIRAN TAB ZA UEFA SIMULACIJU ---
@@ -861,12 +949,12 @@ if not current_elo_df.empty:
                 st.error(f"Error processing file: {e}")
 
         if st.session_state.uefa_sim_results is not None:
-            results = st.session_state.uefa_sim_results
+            results_df, detailed_results = st.session_state.uefa_sim_results
             st.subheader("Rezultati simulacije")
             main_cols = ['avg_rank', 'avg_pts', 'Top 8 (League)', 'Reach Last 16', 'Reach QF', 'Reach SF', 'Reach Final', 'Winner']
             
             if display_format == "Decimal Odds":
-                display_df = results.copy()
+                display_df = results_df.copy()
                 prob_cols = [c for c in display_df.columns if c not in ['avg_rank', 'avg_pts']]
                 for col in prob_cols:
                     display_df[col] = display_df[col].apply(lambda p: 1/p if p > 0 else np.nan)
@@ -874,9 +962,43 @@ if not current_elo_df.empty:
                 with st.expander("Prikaži sve detaljne kvote"):
                     st.dataframe(display_df.style.format("{:.2f}", na_rep="-"))
             else:
-                st.dataframe(results[main_cols].style.format("{:.2f}", subset=['avg_rank', 'avg_pts']).format("{:.1%}", subset=[c for c in main_cols if c not in ['avg_rank', 'avg_pts']]))
+                st.dataframe(results_df[main_cols].style.format("{:.2f}", subset=['avg_rank', 'avg_pts']).format("{:.1%}", subset=[c for c in main_cols if c not in ['avg_rank', 'avg_pts']]))
                 with st.expander("Prikaži sve detaljne verovatnoće"):
-                    st.dataframe(results.style.format("{:.2f}", subset=['avg_rank', 'avg_pts']).format("{:.1%}", subset=[c for c in results.columns if c not in ['avg_rank', 'avg_pts']]))
+                    st.dataframe(results_df.style.format("{:.2f}", subset=['avg_rank', 'avg_pts']).format("{:.1%}", subset=[c for c in results_df.columns if c not in ['avg_rank', 'avg_pts']]))
+            
+            st.markdown("---")
+            st.header("Detailed Team Analysis")
+            
+            selected_team_analysis_uefa = st.selectbox("Select a team for detailed analysis:", options=results_df.index.tolist(), key="uefa_team_select")
+            if selected_team_analysis_uefa:
+                st.subheader(f"Expected League Phase Outcomes for {selected_team_analysis_uefa}")
+                
+                avg_wins = np.mean(detailed_results['wins'][selected_team_analysis_uefa])
+                avg_draws = np.mean(detailed_results['draws'][selected_team_analysis_uefa])
+                avg_losses = np.mean(detailed_results['losses'][selected_team_analysis_uefa])
+
+                an_col1, an_col2, an_col3 = st.columns(3)
+                an_col1.metric("Expected Wins", f"{avg_wins:.2f}")
+                an_col2.metric("Expected Draws", f"{avg_draws:.2f}")
+                an_col3.metric("Expected Losses", f"{avg_losses:.2f}")
+
+                st.subheader(f"League Phase Points Probability for {selected_team_analysis_uefa}")
+                target_pts_uefa = st.number_input("Target Points:", min_value=0, value=int(results_df.loc[selected_team_analysis_uefa]['avg_pts']), step=1, key="uefa_pts_input")
+                
+                points_array = np.array(detailed_results['points'][selected_team_analysis_uefa])
+                total_sims = len(points_array)
+                
+                prob_over = np.sum(points_array > target_pts_uefa) / total_sims
+                prob_under = np.sum(points_array < target_pts_uefa) / total_sims
+                prob_exact = np.sum(points_array == target_pts_uefa) / total_sims
+
+                pts_col1, pts_col2, pts_col3 = st.columns(3)
+                with pts_col1:
+                    st.metric(f"Over {target_pts_uefa} Points", format_value(prob_over, display_format))
+                with pts_col2:
+                    st.metric(f"Under {target_pts_uefa} Points", format_value(prob_under, display_format))
+                with pts_col3:
+                    st.metric(f"Exactly {target_pts_uefa} Points", format_value(prob_exact, display_format))
 
     with tab3:
         st.header("Custom Tournament Simulation")
