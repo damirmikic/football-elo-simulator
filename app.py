@@ -384,7 +384,8 @@ def run_uefa_simulation(teams_df, fixtures, num_simulations, hfa_value):
         league_standings = pd.Series(sim_points).sort_values(ascending=False)
         
         # Ažuriranje statistike ligaške faze
-        league_phase_winners[league_standings.index[0]] += 1
+        if not league_standings.empty:
+            league_phase_winners[league_standings.index[0]] += 1
         for rank, team in enumerate(league_standings.index):
             total_points[team] += league_standings[team]
             rank_sum[team] += rank + 1
@@ -427,7 +428,7 @@ def run_uefa_simulation(teams_df, fixtures, num_simulations, hfa_value):
             next_round_teams = []
             for k in range(0, len(round_teams), 2):
                 team1, team2 = round_teams[k], round_teams[k+1]
-                prob1_wins, _, _ = calculate_single_match_probs(sim_elos[team1], sim_elos[team2], hfa_value=0)
+                prob1_wins, _, _ = calculate_single_match_probs(sim_elos.get(team1, 1500), sim_elos.get(team2, 1500), hfa_value=0)
                 winner = np.random.choice([team1, team2], p=[prob1_wins, 1-prob1_wins])
                 next_round_teams.append(winner)
             round_teams = next_round_teams
@@ -492,9 +493,15 @@ def display_outcome_cards(team1_name, team2_name, prob1, prob_draw, prob2, elo1,
 # --- Glavna UI aplikacija ---
 st.title("⚽ Football Elo Odds Calculator")
 
+# Inicijalizacija session_state promenljivih
 if 'selected_team' not in st.session_state: st.session_state.selected_team = None
 if 'custom_rounds' not in st.session_state: st.session_state.custom_rounds = []
 if 'corrections' not in st.session_state: st.session_state.corrections = {}
+if 'league_sim_results' not in st.session_state: st.session_state.league_sim_results = None
+if 'uefa_sim_results' not in st.session_state: st.session_state.uefa_sim_results = None
+if 'custom_sim_results' not in st.session_state: st.session_state.custom_sim_results = None
+if 'custom_sim_display_type' not in st.session_state: st.session_state.custom_sim_display_type = None
+
 
 current_elo_df = load_current_elo_data()
 
@@ -729,25 +736,27 @@ if not current_elo_df.empty:
         if st.button("Run Simulation", key="run_league_sim_button"):
             if calculation_mode == "Current Ratings":
                 if not edited_teams_df.empty:
-                    results = run_league_simulation(edited_teams_df, num_sims, hfa_to_apply, league_format, playoff_teams_count, split_teams_count, post_split_format)
-                    position_cols = [col for col in results.columns if col not in ['Expected Pts', 'Champion %']]
-                    
-                    if display_format == "Decimal Odds":
-                        display_df = results.copy()
-                        for col in position_cols:
-                            display_df[col] = display_df[col].apply(lambda p: 1/p if p > 0 else np.nan)
-                        if 'Champion %' in display_df.columns:
-                             display_df['Champion %'] = display_df['Champion %'].apply(lambda p: 1/p if p > 0 else np.nan)
-                        st.dataframe(display_df.style.format("{:.2f}", na_rep="-"))
-                    else:
-                        format_dict = {'Expected Pts': '{:.2f}'}
-                        if 'Champion %' in results.columns:
-                            format_dict['Champion %'] = '{:.1%}'
-                        st.dataframe(results.style.background_gradient(cmap='Greens', subset=position_cols).format("{:.1%}").format(format_dict))
-                else:
-                    st.warning("Please select/confirm teams in the customization section before running.")
+                    st.session_state.league_sim_results = run_league_simulation(edited_teams_df, num_sims, hfa_to_apply, league_format, playoff_teams_count, split_teams_count, post_split_format)
             else:
                 st.warning("League simulation is only available for 'Current Ratings' mode.")
+        
+        if st.session_state.league_sim_results is not None:
+            results = st.session_state.league_sim_results
+            position_cols = [col for col in results.columns if col not in ['Expected Pts', 'Champion %']]
+            
+            if display_format == "Decimal Odds":
+                display_df = results.copy()
+                for col in position_cols:
+                    display_df[col] = display_df[col].apply(lambda p: 1/p if p > 0 else np.nan)
+                if 'Champion %' in display_df.columns:
+                     display_df['Champion %'] = display_df['Champion %'].apply(lambda p: 1/p if p > 0 else np.nan)
+                st.dataframe(display_df.style.format("{:.2f}", na_rep="-"))
+            else:
+                format_dict = {'Expected Pts': '{:.2f}'}
+                if 'Champion %' in results.columns:
+                    format_dict['Champion %'] = '{:.1%}'
+                st.dataframe(results.style.background_gradient(cmap='Greens', subset=position_cols).format("{:.1%}").format(format_dict))
+
 
     # --- AŽURIRAN TAB ZA UEFA SIMULACIJU ---
     with tab4:
@@ -757,6 +766,9 @@ if not current_elo_df.empty:
         num_uefa_sims = st.number_input("Number of simulations:", min_value=10, max_value=10000, value=100, step=10, key="uefa_sims_input")
         
         uploaded_file = st.file_uploader("Upload CSV file with fixtures", type="csv")
+        
+        run_button_placeholder = st.empty()
+        mapping_placeholder = st.empty()
         
         if uploaded_file is not None:
             try:
@@ -770,83 +782,67 @@ if not current_elo_df.empty:
                     unmatched_names = sorted([name for name in all_csv_teams if name not in all_club_names])
                     
                     if unmatched_names:
-                        st.warning("Some team names from your file could not be found. Please map them to the official names from ClubElo:")
-                        
-                        cols = st.columns(3)
-                        col_idx = 0
-                        
-                        if 'last_uploaded_file' not in st.session_state or st.session_state.last_uploaded_file != uploaded_file.name:
-                            st.session_state.corrections = {name: None for name in unmatched_names}
-                            st.session_state.last_uploaded_file = uploaded_file.name
+                        with mapping_placeholder.container():
+                            st.warning("Some team names from your file could not be found. Please map them to the official names from ClubElo:")
+                            
+                            cols = st.columns(3)
+                            col_idx = 0
+                            
+                            if 'last_uploaded_file' not in st.session_state or st.session_state.last_uploaded_file != uploaded_file.name:
+                                st.session_state.corrections = {name: None for name in unmatched_names}
+                                st.session_state.last_uploaded_file = uploaded_file.name
 
-                        for name in unmatched_names:
-                            with cols[col_idx % 3]:
-                                selected_match = st.selectbox(
-                                    f"Map '{name}':", 
-                                    options=[None] + all_club_names, 
-                                    key=f"map_{name}",
-                                    index=0
-                                )
-                                if selected_match:
-                                    st.session_state.corrections[name] = selected_match
-                            col_idx += 1
+                            for name in unmatched_names:
+                                with cols[col_idx % 3]:
+                                    selected_match = st.selectbox(
+                                        f"Map '{name}':", 
+                                        options=[None] + all_club_names, 
+                                        key=f"map_{name}",
+                                        index=0
+                                    )
+                                    if selected_match:
+                                        st.session_state.corrections[name] = selected_match
+                                col_idx += 1
 
                         all_mapped = all(st.session_state.corrections.get(name) is not None for name in unmatched_names)
                         
                         if all_mapped:
-                            st.success("All names have been mapped!")
-                            if st.button("Run Simulation with Mapped Names", key="run_uefa_sim_mapped_button"):
+                            mapping_placeholder.success("All names have been mapped!")
+                            if run_button_placeholder.button("Run Simulation with Mapped Names", key="run_uefa_sim_mapped_button"):
                                 corrected_fixtures = [
                                     (st.session_state.corrections.get(h, h), st.session_state.corrections.get(a, a))
                                     for h, a in csv_fixtures
                                 ]
                                 simulation_teams = set(h for h, a in corrected_fixtures) | set(a for h, a in corrected_fixtures)
                                 sim_teams_df = current_elo_df.loc[list(simulation_teams)][['elo']].copy()
-                                
-                                results = run_uefa_simulation(sim_teams_df, corrected_fixtures, num_uefa_sims, hfa_to_apply)
-                                
-                                st.subheader("Rezultati simulacije")
-                                main_cols = ['avg_rank', 'avg_pts', 'Top 8 (League)', 'Reach Last 16', 'Reach QF', 'Reach SF', 'Reach Final', 'Winner']
-                                
-                                if display_format == "Decimal Odds":
-                                    display_df = results.copy()
-                                    prob_cols = [c for c in display_df.columns if c not in ['avg_rank', 'avg_pts']]
-                                    for col in prob_cols:
-                                        display_df[col] = display_df[col].apply(lambda p: 1/p if p > 0 else np.nan)
-                                    st.dataframe(display_df[main_cols].style.format("{:.2f}", na_rep="-"))
-                                    with st.expander("Prikaži sve detaljne kvote"):
-                                        st.dataframe(display_df.style.format("{:.2f}", na_rep="-"))
-                                else:
-                                    st.dataframe(results[main_cols].style.format("{:.2f}", subset=['avg_rank', 'avg_pts']).format("{:.1%}", subset=[c for c in main_cols if c not in ['avg_rank', 'avg_pts']]))
-                                    with st.expander("Prikaži sve detaljne verovatnoće"):
-                                        st.dataframe(results.style.format("{:.2f}", subset=['avg_rank', 'avg_pts']).format("{:.1%}", subset=[c for c in results.columns if c not in ['avg_rank', 'avg_pts']]))
-
-
+                                st.session_state.uefa_sim_results = run_uefa_simulation(sim_teams_df, corrected_fixtures, num_uefa_sims, hfa_to_apply)
                     else:
-                        st.success("All team names from the file are valid.")
-                        if st.button("Run Simulation", key="run_uefa_sim_valid_button"):
+                        mapping_placeholder.success("All team names from the file are valid.")
+                        if run_button_placeholder.button("Run Simulation", key="run_uefa_sim_valid_button"):
                             simulation_teams = all_csv_teams
                             sim_teams_df = current_elo_df.loc[list(simulation_teams)][['elo']].copy()
-                            results = run_uefa_simulation(sim_teams_df, csv_fixtures, num_uefa_sims, hfa_to_apply)
-                            
-                            st.subheader("Rezultati simulacije")
-                            main_cols = ['avg_rank', 'avg_pts', 'Top 8 (League)', 'Reach Last 16', 'Reach QF', 'Reach SF', 'Reach Final', 'Winner']
-                            
-                            if display_format == "Decimal Odds":
-                                display_df = results.copy()
-                                prob_cols = [c for c in display_df.columns if c not in ['avg_rank', 'avg_pts']]
-                                for col in prob_cols:
-                                    display_df[col] = display_df[col].apply(lambda p: 1/p if p > 0 else np.nan)
-                                st.dataframe(display_df[main_cols].style.format("{:.2f}", na_rep="-"))
-                                with st.expander("Prikaži sve detaljne kvote"):
-                                    st.dataframe(display_df.style.format("{:.2f}", na_rep="-"))
-                            else:
-                                st.dataframe(results[main_cols].style.format("{:.2f}", subset=['avg_rank', 'avg_pts']).format("{:.1%}", subset=[c for c in main_cols if c not in ['avg_rank', 'avg_pts']]))
-                                with st.expander("Prikaži sve detaljne verovatnoće"):
-                                    st.dataframe(results.style.format("{:.2f}", subset=['avg_rank', 'avg_pts']).format("{:.1%}", subset=[c for c in results.columns if c not in ['avg_rank', 'avg_pts']]))
+                            st.session_state.uefa_sim_results = run_uefa_simulation(sim_teams_df, csv_fixtures, num_uefa_sims, hfa_to_apply)
 
             except Exception as e:
                 st.error(f"Error processing file: {e}")
+
+        if st.session_state.uefa_sim_results is not None:
+            results = st.session_state.uefa_sim_results
+            st.subheader("Rezultati simulacije")
+            main_cols = ['avg_rank', 'avg_pts', 'Top 8 (League)', 'Reach Last 16', 'Reach QF', 'Reach SF', 'Reach Final', 'Winner']
+            
+            if display_format == "Decimal Odds":
+                display_df = results.copy()
+                prob_cols = [c for c in display_df.columns if c not in ['avg_rank', 'avg_pts']]
+                for col in prob_cols:
+                    display_df[col] = display_df[col].apply(lambda p: 1/p if p > 0 else np.nan)
+                st.dataframe(display_df[main_cols].style.format("{:.2f}", na_rep="-"))
+                with st.expander("Prikaži sve detaljne kvote"):
+                    st.dataframe(display_df.style.format("{:.2f}", na_rep="-"))
+            else:
+                st.dataframe(results[main_cols].style.format("{:.2f}", subset=['avg_rank', 'avg_pts']).format("{:.1%}", subset=[c for c in main_cols if c not in ['avg_rank', 'avg_pts']]))
+                with st.expander("Prikaži sve detaljne verovatnoće"):
+                    st.dataframe(results.style.format("{:.2f}", subset=['avg_rank', 'avg_pts']).format("{:.1%}", subset=[c for c in results.columns if c not in ['avg_rank', 'avg_pts']]))
 
     with tab3:
         st.header("Custom Tournament Simulation")
@@ -939,75 +935,51 @@ if not current_elo_df.empty:
                         manual_matchups_valid = False
 
         if st.button("Run Custom Simulation", key="run_custom_sim_button"):
-            if not selected_teams:
+            st.session_state.custom_sim_results = None 
+            if not selected_teams and tournament_format != "Custom Knockout":
                 st.warning("Please select at least two teams.")
-
             elif tournament_format == "Custom Knockout":
-                is_valid_bracket = all(
-                    matchup['team_a'] is not None and matchup['team_b'] is not None
-                    for round_matchups in st.session_state.custom_rounds
-                    for matchup in round_matchups
-                )
-
+                is_valid_bracket = all(matchup['team_a'] is not None and matchup['team_b'] is not None for r in st.session_state.custom_rounds for matchup in r)
                 if st.session_state.custom_rounds and is_valid_bracket:
-                    
-                    all_teams_in_bracket = set()
-                    for round_matchups in st.session_state.custom_rounds:
-                        for matchup in round_matchups:
-                            if ' of ' not in matchup['team_a']: all_teams_in_bracket.add(matchup['team_a'])
-                            if ' of ' not in matchup['team_b']: all_teams_in_bracket.add(matchup['team_b'])
-                    
-                    if not all(team in current_elo_df.index for team in all_teams_in_bracket if team is not None):
-                        st.error("One or more teams in the bracket could not be found in the Elo database. Please check the names.")
+                    all_teams_in_bracket = set(t for r in st.session_state.custom_rounds for m in r for t in [m['team_a'], m['team_b']] if ' of ' not in t and t is not None)
+                    if not all(team in current_elo_df.index for team in all_teams_in_bracket):
+                        st.error("One or more teams in the bracket could not be found in the Elo database.")
                     else:
-                        teams_to_fetch = [team for team in all_teams_in_bracket if team is not None]
-                        knockout_teams_df = current_elo_df.loc[list(teams_to_fetch)][['elo']].copy()
-                        custom_knockout_results = run_custom_knockout_simulation(knockout_teams_df, num_knockout_sims, st.session_state.custom_rounds, hfa_to_apply)
-                        
-                        st.subheader("Tournament Win Probability")
-                        if display_format == "Decimal Odds":
-                            custom_knockout_results = custom_knockout_results.apply(lambda p: 1/p if p > 0 else np.nan)
-                            st.dataframe(custom_knockout_results.to_frame(name="Decimal Odds").style.format("{:.2f}", na_rep="-"))
-                        else:
-                            st.dataframe(custom_knockout_results.to_frame(name="Win Probability").style.format("{:.1%}"))
-                        st.bar_chart(custom_knockout_results)
-                else:
-                    st.error("Please ensure all matchups in your custom bracket are filled before running the simulation.")
-
+                        st.session_state.custom_sim_results = run_custom_knockout_simulation(current_elo_df.loc[list(all_teams_in_bracket)][['elo']].copy(), num_knockout_sims, st.session_state.custom_rounds, hfa_to_apply)
+                        st.session_state.custom_sim_display_type = "knockout"
+                else: st.error("Please ensure all matchups are filled.")
             elif tournament_format == "Single Elimination Knockout":
                 num_teams = len(selected_teams)
                 if num_teams > 1 and (num_teams & (num_teams - 1) == 0):
-                    if not manual_matchups:
-                        shuffled_teams = selected_teams.copy()
-                        np.random.shuffle(shuffled_teams)
-                        first_round_matchups = [(shuffled_teams[j], shuffled_teams[j+1]) for j in range(0, num_teams, 2)]
-
+                    if not manual_matchups: first_round_matchups = [(selected_teams[j], selected_teams[j+1]) for j in range(0, num_teams, 2)]
                     if manual_matchups_valid:
-                        knockout_teams_df = current_elo_df.loc[selected_teams][['elo']].copy()
-                        knockout_results = run_knockout_simulation(knockout_teams_df, num_knockout_sims, first_round_matchups)
-                        
-                        st.subheader("Tournament Win Probability")
-                        if display_format == "Decimal Odds":
-                            knockout_results = knockout_results.apply(lambda p: 1/p if p > 0 else np.nan)
-                            st.dataframe(knockout_results.to_frame(name="Decimal Odds").style.format("{:.2f}", na_rep="-"))
-                        else:
-                            st.dataframe(knockout_results.to_frame(name="Win Probability").style.format("{:.1%}"))
-                        st.bar_chart(knockout_results)
-                else:
-                    st.error("Please select a number of teams that is a power of 2 (e.g., 4, 8, 16, 32) for a knockout tournament.")
-            
+                        st.session_state.custom_sim_results = run_knockout_simulation(current_elo_df.loc[selected_teams][['elo']].copy(), num_knockout_sims, first_round_matchups)
+                        st.session_state.custom_sim_display_type = "knockout"
+                else: st.error("Please select a number of teams that is a power of 2 (e.g., 4, 8, 16, 32).")
             else:
                 robin_format = "Single" if tournament_format == "Single Round Robin" else "Double"
-                round_robin_teams_df = current_elo_df.loc[selected_teams][['elo']].copy()
-                round_robin_results = run_round_robin_simulation(round_robin_teams_df, num_knockout_sims, hfa_to_apply, robin_format)
-                
+                st.session_state.custom_sim_results = run_round_robin_simulation(current_elo_df.loc[selected_teams][['elo']].copy(), num_knockout_sims, hfa_to_apply, robin_format)
+                st.session_state.custom_sim_display_type = "robin"
+
+        if st.session_state.custom_sim_results is not None:
+            results = st.session_state.custom_sim_results
+            display_type = st.session_state.custom_sim_display_type
+            if display_type == "knockout":
+                st.subheader("Tournament Win Probability")
+                if display_format == "Decimal Odds":
+                    results_odds = results.apply(lambda p: 1/p if p > 0 else np.nan)
+                    st.dataframe(results_odds.to_frame(name="Decimal Odds").style.format("{:.2f}", na_rep="-"))
+                else:
+                    st.dataframe(results.to_frame(name="Win Probability").style.format("{:.1%}"))
+                st.bar_chart(results)
+            elif display_type == "robin":
                 st.subheader("Simulated Round Robin Results")
-                st.dataframe(round_robin_results.to_frame(name="Average Points").style.format("{:.2f}"))
+                st.dataframe(results.to_frame(name="Average Points").style.format("{:.2f}"))
+
 
 else:
     st.warning("Could not load Elo data. The application cannot proceed.")
 
 st.sidebar.markdown("---")
 st.sidebar.info("Data from ClubElo.com via `soccerdata`.")
-
 
