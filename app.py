@@ -92,6 +92,8 @@ def run_league_simulation(league_teams_df, num_simulations, hfa_value, league_fo
     num_teams = len(teams)
     
     initial_elos = league_teams_df['elo'].to_dict()
+    initial_points = league_teams_df['current_points'].to_dict()
+    
     position_counts = {team: {pos: 0 for pos in range(1, num_teams + 1)} for team in teams}
     total_points = {team: 0 for team in teams}
     playoff_champions = {team: 0 for team in teams}
@@ -103,7 +105,7 @@ def run_league_simulation(league_teams_df, num_simulations, hfa_value, league_fo
         status_text.text(f"Running simulation {i + 1}/{num_simulations}...")
         
         sim_elos = initial_elos.copy()
-        sim_points = {team: 0 for team in teams}
+        sim_points = initial_points.copy()
 
         if league_format == "Three Round Robin + Split":
             initial_fixtures = list(itertools.permutations(teams, 2)) * 3
@@ -341,10 +343,9 @@ def run_round_robin_simulation(teams_df, num_simulations, hfa_value, robin_forma
     avg_points = pd.Series({team: total_points[team] / num_simulations for team in teams})
     return avg_points.sort_values(ascending=False)
 
-# --- AŽURIRANA Funkcija za UEFA simulaciju ---
-def run_uefa_simulation(teams_df, fixtures, num_simulations, hfa_value):
+def run_uefa_simulation(teams_df, fixtures_df, num_simulations, hfa_value):
     """
-    Vrši simulaciju UEFA takmičenja po novom formatu sa detaljnim praćenjem statistike.
+    Vrši simulaciju UEFA takmičenja, uzimajući u obzir već odigrane mečeve.
     """
     initial_elos = teams_df['elo'].to_dict()
     all_teams = list(initial_elos.keys())
@@ -373,13 +374,39 @@ def run_uefa_simulation(teams_df, fixtures, num_simulations, hfa_value):
         sim_points = {team: 0 for team in all_teams}
 
         # Faza 1: Ligaški deo
-        for home_team, away_team in fixtures:
-            elo_home, elo_away = sim_elos.get(home_team, 1500), sim_elos.get(away_team, 1500)
-            p_home, p_draw, p_away = calculate_single_match_probs(elo_home, elo_away, hfa_value)
-            result = np.random.choice(['H', 'D', 'A'], p=[p_home, p_draw, p_away])
-            if result == 'H': sim_points[home_team] += 3
-            elif result == 'D': sim_points[home_team] += 1; sim_points[away_team] += 1
-            else: sim_points[away_team] += 3
+        for _, row in fixtures_df.iterrows():
+            home_team, away_team = row['home_team'], row['away_team']
+            
+            # Ako rezultat postoji, obradi ga
+            if pd.notna(row.get('home_score')) and pd.notna(row.get('away_score')):
+                home_score = row['home_score']
+                away_score = row['away_score']
+                
+                if home_score > away_score:
+                    sim_points[home_team] += 3
+                    actual_home_score = 1.0
+                elif home_score < away_score:
+                    sim_points[away_team] += 3
+                    actual_home_score = 0.0
+                else:
+                    sim_points[home_team] += 1
+                    sim_points[away_team] += 1
+                    actual_home_score = 0.5
+                
+                # Ažuriraj Elo rejtinge na osnovu stvarnog rezultata
+                expected_home_score = 1 / (1 + 10**((sim_elos[away_team] - (sim_elos[home_team] + hfa_value)) / 400))
+                new_elo_home, new_elo_away = update_elo(sim_elos[home_team], sim_elos[away_team], actual_home_score, expected_home_score)
+                sim_elos[home_team] = new_elo_home
+                sim_elos[away_team] = new_elo_away
+            
+            # Ako rezultat ne postoji, simuliraj meč
+            else:
+                elo_home, elo_away = sim_elos.get(home_team, 1500), sim_elos.get(away_team, 1500)
+                p_home, p_draw, p_away = calculate_single_match_probs(elo_home, elo_away, hfa_value)
+                result = np.random.choice(['H', 'D', 'A'], p=[p_home, p_draw, p_away])
+                if result == 'H': sim_points[home_team] += 3
+                elif result == 'D': sim_points[home_team] += 1; sim_points[away_team] += 1
+                else: sim_points[away_team] += 3
         
         league_standings = pd.Series(sim_points).sort_values(ascending=False)
         
@@ -693,16 +720,24 @@ if not current_elo_df.empty:
             split_teams_count = st.slider("Number of teams in Championship group:", min_value=4, max_value=10, value=6, step=1)
             post_split_format = st.radio("Post-Split Format:", ["Single Round Robin", "Double Round Robin"], horizontal=True)
 
-        with st.expander("Customize Participants and Ratings"):
+        with st.expander("Customize Participants, Ratings, and Current Points"):
             initial_sim_teams = league_club_names.copy()
             sim_participants = st.multiselect("Select teams for the simulation", options=all_club_names, default=initial_sim_teams, key="league_multi_select")
             
             if sim_participants:
                 sim_teams_df = current_elo_df.loc[sim_participants][['elo']].copy()
-                st.write("Edit Elo ratings below:")
-                edited_teams_df = st.data_editor(sim_teams_df, column_config={"elo": st.column_config.NumberColumn("Elo Rating", min_value=1000, max_value=2500, step=10, format="%d")}, key="league_sim_editor")
+                sim_teams_df['current_points'] = 0 # Inicijalizacija bodova
+                st.write("Edit Elo ratings and current points below:")
+                edited_teams_df = st.data_editor(
+                    sim_teams_df, 
+                    column_config={
+                        "elo": st.column_config.NumberColumn("Elo Rating", min_value=1000, max_value=2500, step=10, format="%d"),
+                        "current_points": st.column_config.NumberColumn("Current Points", min_value=0, step=1, format="%d")
+                    }, 
+                    key="league_sim_editor"
+                )
             else:
-                edited_teams_df = pd.DataFrame(columns=['elo'])
+                edited_teams_df = pd.DataFrame(columns=['elo', 'current_points'])
 
         num_teams_in_league = len(edited_teams_df)
         st.metric("Number of Teams in Simulation", num_teams_in_league)
@@ -761,23 +796,28 @@ if not current_elo_df.empty:
     # --- AŽURIRAN TAB ZA UEFA SIMULACIJU ---
     with tab4:
         st.header("UEFA Competition Simulation (New Format)")
-        st.info("Ova simulacija koristi 'Current Ratings' i fiksne parove koje uploadujete.")
+        st.info("Upload a CSV file with `home_team` and `away_team` columns. You can also add optional `home_score` and `away_score` columns for matches that have already been played.")
 
         num_uefa_sims = st.number_input("Number of simulations:", min_value=10, max_value=10000, value=100, step=10, key="uefa_sims_input")
         
-        uploaded_file = st.file_uploader("Upload CSV file with fixtures", type="csv")
+        uploaded_file = st.file_uploader("Upload CSV file with fixtures", type="csv", key="uefa_uploader")
         
         run_button_placeholder = st.empty()
         mapping_placeholder = st.empty()
         
         if uploaded_file is not None:
             try:
+                # Resetovanje rezultata ako se uploaduje novi fajl
+                if 'last_uploaded_filename' not in st.session_state or st.session_state.last_uploaded_filename != uploaded_file.name:
+                    st.session_state.uefa_sim_results = None
+                    st.session_state.last_uploaded_filename = uploaded_file.name
+
                 fixtures_df = pd.read_csv(io.StringIO(uploaded_file.getvalue().decode('utf-8')))
+                
+                # Provera neophodnih kolona
                 if 'home_team' not in fixtures_df.columns or 'away_team' not in fixtures_df.columns:
                      st.error("CSV file must contain 'home_team' and 'away_team' columns.")
                 else:
-                    csv_fixtures = list(fixtures_df.itertuples(index=False, name=None))
-                    
                     all_csv_teams = set(fixtures_df['home_team'].unique()) | set(fixtures_df['away_team'].unique())
                     unmatched_names = sorted([name for name in all_csv_teams if name not in all_club_names])
                     
@@ -794,14 +834,8 @@ if not current_elo_df.empty:
 
                             for name in unmatched_names:
                                 with cols[col_idx % 3]:
-                                    selected_match = st.selectbox(
-                                        f"Map '{name}':", 
-                                        options=[None] + all_club_names, 
-                                        key=f"map_{name}",
-                                        index=0
-                                    )
-                                    if selected_match:
-                                        st.session_state.corrections[name] = selected_match
+                                    selected_match = st.selectbox(f"Map '{name}':", options=[None] + all_club_names, key=f"map_{name}", index=0)
+                                    if selected_match: st.session_state.corrections[name] = selected_match
                                 col_idx += 1
 
                         all_mapped = all(st.session_state.corrections.get(name) is not None for name in unmatched_names)
@@ -809,19 +843,19 @@ if not current_elo_df.empty:
                         if all_mapped:
                             mapping_placeholder.success("All names have been mapped!")
                             if run_button_placeholder.button("Run Simulation with Mapped Names", key="run_uefa_sim_mapped_button"):
-                                corrected_fixtures = [
-                                    (st.session_state.corrections.get(h, h), st.session_state.corrections.get(a, a))
-                                    for h, a in csv_fixtures
-                                ]
-                                simulation_teams = set(h for h, a in corrected_fixtures) | set(a for h, a in corrected_fixtures)
+                                st.session_state.uefa_sim_results = None # Reset
+                                fixtures_df['home_team'] = fixtures_df['home_team'].apply(lambda x: st.session_state.corrections.get(x, x))
+                                fixtures_df['away_team'] = fixtures_df['away_team'].apply(lambda x: st.session_state.corrections.get(x, x))
+                                simulation_teams = set(fixtures_df['home_team'].unique()) | set(fixtures_df['away_team'].unique())
                                 sim_teams_df = current_elo_df.loc[list(simulation_teams)][['elo']].copy()
-                                st.session_state.uefa_sim_results = run_uefa_simulation(sim_teams_df, corrected_fixtures, num_uefa_sims, hfa_to_apply)
+                                st.session_state.uefa_sim_results = run_uefa_simulation(sim_teams_df, fixtures_df, num_uefa_sims, hfa_to_apply)
                     else:
                         mapping_placeholder.success("All team names from the file are valid.")
                         if run_button_placeholder.button("Run Simulation", key="run_uefa_sim_valid_button"):
+                            st.session_state.uefa_sim_results = None # Reset
                             simulation_teams = all_csv_teams
                             sim_teams_df = current_elo_df.loc[list(simulation_teams)][['elo']].copy()
-                            st.session_state.uefa_sim_results = run_uefa_simulation(sim_teams_df, csv_fixtures, num_uefa_sims, hfa_to_apply)
+                            st.session_state.uefa_sim_results = run_uefa_simulation(sim_teams_df, fixtures_df, num_uefa_sims, hfa_to_apply)
 
             except Exception as e:
                 st.error(f"Error processing file: {e}")
