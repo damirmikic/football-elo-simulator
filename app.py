@@ -15,6 +15,20 @@ st.set_page_config(
     layout="wide"
 )
 
+# --- Inicijalizacija Session State ---
+if 'selected_team' not in st.session_state: st.session_state.selected_team = None
+if 'custom_rounds' not in st.session_state: st.session_state.custom_rounds = []
+if 'corrections' not in st.session_state: st.session_state.corrections = {}
+if 'league_sim_results' not in st.session_state: st.session_state.league_sim_results = None
+if 'uefa_sim_results' not in st.session_state: st.session_state.uefa_sim_results = None
+if 'custom_sim_results' not in st.session_state: st.session_state.custom_sim_results = None
+if 'custom_sim_display_type' not in st.session_state: st.session_state.custom_sim_display_type = None
+# --- Keširanje za UEFA tab ---
+if 'uploaded_uefa_csv_content' not in st.session_state: st.session_state.uploaded_uefa_csv_content = None
+if 'uploaded_uefa_csv_name' not in st.session_state: st.session_state.uploaded_uefa_csv_name = None
+if 'fixtures_df_uefa' not in st.session_state: st.session_state.fixtures_df_uefa = None
+
+
 # --- Keširanje učitavanja podataka ---
 @st.cache_data(ttl=3600)  # Keširanje podataka na 1 sat
 def load_current_elo_data():
@@ -586,16 +600,6 @@ def display_outcome_cards(team1_name, team2_name, prob1, prob_draw, prob2, elo1,
 # --- Glavna UI aplikacija ---
 st.title("⚽ Football Elo Odds Calculator")
 
-# Inicijalizacija session_state promenljivih
-if 'selected_team' not in st.session_state: st.session_state.selected_team = None
-if 'custom_rounds' not in st.session_state: st.session_state.custom_rounds = []
-if 'corrections' not in st.session_state: st.session_state.corrections = {}
-if 'league_sim_results' not in st.session_state: st.session_state.league_sim_results = None
-if 'uefa_sim_results' not in st.session_state: st.session_state.uefa_sim_results = None
-if 'custom_sim_results' not in st.session_state: st.session_state.custom_sim_results = None
-if 'custom_sim_display_type' not in st.session_state: st.session_state.custom_sim_display_type = None
-
-
 current_elo_df = load_current_elo_data()
 
 if not current_elo_df.empty:
@@ -881,76 +885,83 @@ if not current_elo_df.empty:
                     st.metric(f"Exactly {target_pts} Points", format_value(prob_exact, display_format))
 
 
-    # --- AŽURIRAN TAB ZA UEFA SIMULACIJU ---
+    # --- AŽURIRAN TAB ZA UEFA SIMULACIJU (SA INTEGRISANIM IZMENAMA) ---
     with tab4:
         st.header("UEFA Competition Simulation (New Format)")
-        st.info("Upload a CSV file with `home_team` and `away_team` columns. You can also add optional `home_score` and `away_score` columns for matches that have already been played.")
+        st.info("Upload a CSV with `home_team` & `away_team` columns. Optional `home_score` & `away_score` can be added for played matches. Uploaded file and mappings will be cached.")
 
         num_uefa_sims = st.number_input("Number of simulations:", min_value=10, max_value=10000, value=100, step=10, key="uefa_sims_input")
         
         uploaded_file = st.file_uploader("Upload CSV file with fixtures", type="csv", key="uefa_uploader")
-        
-        run_button_placeholder = st.empty()
-        mapping_placeholder = st.empty()
-        
-        if uploaded_file is not None:
-            try:
-                # Resetovanje rezultata ako se uploaduje novi fajl
-                if 'last_uploaded_filename' not in st.session_state or st.session_state.last_uploaded_filename != uploaded_file.name:
-                    st.session_state.uefa_sim_results = None
-                    st.session_state.last_uploaded_filename = uploaded_file.name
 
-                fixtures_df = pd.read_csv(io.StringIO(uploaded_file.getvalue().decode('utf-8')))
-                
-                # Provera neophodnih kolona
+        # --- LOGIKA ZA KEŠIRANJE FAJLA ---
+        if uploaded_file is not None:
+            if uploaded_file.name != st.session_state.uploaded_uefa_csv_name:
+                st.session_state.uploaded_uefa_csv_content = uploaded_file.getvalue().decode('utf-8')
+                st.session_state.uploaded_uefa_csv_name = uploaded_file.name
+                st.session_state.corrections = {}
+                st.session_state.uefa_sim_results = None
+                st.session_state.fixtures_df_uefa = None
+                st.rerun()
+
+        # Glavna logika sada zavisi od session state-a
+        if st.session_state.uploaded_uefa_csv_content:
+            try:
+                fixtures_df = pd.read_csv(io.StringIO(st.session_state.uploaded_uefa_csv_content))
+                st.session_state.fixtures_df_uefa = fixtures_df.copy() # Sačuvaj originalni DF za analizu
+
                 if 'home_team' not in fixtures_df.columns or 'away_team' not in fixtures_df.columns:
                      st.error("CSV file must contain 'home_team' and 'away_team' columns.")
                 else:
                     all_csv_teams = set(fixtures_df['home_team'].unique()) | set(fixtures_df['away_team'].unique())
                     unmatched_names = sorted([name for name in all_csv_teams if name not in all_club_names])
                     
-                    if unmatched_names:
-                        with mapping_placeholder.container():
-                            st.warning("Some team names from your file could not be found. Please map them to the official names from ClubElo:")
-                            
-                            cols = st.columns(3)
-                            col_idx = 0
-                            
-                            if 'last_uploaded_file' not in st.session_state or st.session_state.last_uploaded_file != uploaded_file.name:
-                                st.session_state.corrections = {name: None for name in unmatched_names}
-                                st.session_state.last_uploaded_file = uploaded_file.name
+                    is_ready_to_run = False
 
-                            for name in unmatched_names:
-                                with cols[col_idx % 3]:
-                                    selected_match = st.selectbox(f"Map '{name}':", options=[None] + all_club_names, key=f"map_{name}", index=0)
-                                    if selected_match: st.session_state.corrections[name] = selected_match
-                                col_idx += 1
+                    if unmatched_names:
+                        st.warning("Some team names from your file could not be found. Please map them to the official names from ClubElo:")
+                        
+                        cols = st.columns(3)
+                        col_idx = 0
+                        
+                        for name in unmatched_names:
+                            with cols[col_idx % 3]:
+                                current_mapping = st.session_state.corrections.get(name)
+                                index = (all_club_names.index(current_mapping) + 1) if current_mapping in all_club_names else 0
+                                selected_match = st.selectbox(f"Map '{name}':", options=[None] + all_club_names, key=f"map_{name}", index=index)
+                                if selected_match: st.session_state.corrections[name] = selected_match
+                            col_idx += 1
 
                         all_mapped = all(st.session_state.corrections.get(name) is not None for name in unmatched_names)
                         
                         if all_mapped:
-                            mapping_placeholder.success("All names have been mapped!")
-                            if run_button_placeholder.button("Run Simulation with Mapped Names", key="run_uefa_sim_mapped_button"):
-                                st.session_state.uefa_sim_results = None # Reset
-                                fixtures_df['home_team'] = fixtures_df['home_team'].apply(lambda x: st.session_state.corrections.get(x, x))
-                                fixtures_df['away_team'] = fixtures_df['away_team'].apply(lambda x: st.session_state.corrections.get(x, x))
-                                simulation_teams = set(fixtures_df['home_team'].unique()) | set(fixtures_df['away_team'].unique())
-                                sim_teams_df = current_elo_df.loc[list(simulation_teams)][['elo']].copy()
-                                st.session_state.uefa_sim_results = run_uefa_simulation(sim_teams_df, fixtures_df, num_uefa_sims, hfa_to_apply)
-                    else:
-                        mapping_placeholder.success("All team names from the file are valid.")
-                        if run_button_placeholder.button("Run Simulation", key="run_uefa_sim_valid_button"):
-                            st.session_state.uefa_sim_results = None # Reset
-                            simulation_teams = all_csv_teams
-                            sim_teams_df = current_elo_df.loc[list(simulation_teams)][['elo']].copy()
-                            st.session_state.uefa_sim_results = run_uefa_simulation(sim_teams_df, fixtures_df, num_uefa_sims, hfa_to_apply)
+                            st.success("All names have been mapped!")
+                            is_ready_to_run = True
+                            
+                            # Primeni korekcije na DF za simulaciju
+                            fixtures_df['home_team'] = fixtures_df['home_team'].apply(lambda x: st.session_state.corrections.get(x, x))
+                            fixtures_df['away_team'] = fixtures_df['away_team'].apply(lambda x: st.session_state.corrections.get(x, x))
+
+                    else: # Sva imena se poklapaju
+                        st.success("All team names from the file are valid.")
+                        is_ready_to_run = True
+
+                    if is_ready_to_run and st.button("Run Simulation", key="run_uefa_sim_button"):
+                        st.session_state.uefa_sim_results = None # Reset
+                        simulation_teams = set(fixtures_df['home_team'].unique()) | set(fixtures_df['away_team'].unique())
+                        sim_teams_df = current_elo_df.loc[list(simulation_teams)][['elo']].copy()
+                        st.session_state.uefa_sim_results = run_uefa_simulation(sim_teams_df, fixtures_df, num_uefa_sims, hfa_to_apply)
+                        st.rerun()
 
             except Exception as e:
                 st.error(f"Error processing file: {e}")
+                st.session_state.uploaded_uefa_csv_content = None
+                st.session_state.uploaded_uefa_csv_name = None
+                st.rerun()
 
         if st.session_state.uefa_sim_results is not None:
             results_df, detailed_results = st.session_state.uefa_sim_results
-            st.subheader("Rezultati simulacije")
+            st.subheader("Simulation Results")
             main_cols = ['avg_rank', 'avg_pts', 'Top 8 (League)', 'Reach Last 16', 'Reach QF', 'Reach SF', 'Reach Final', 'Winner']
             
             if display_format == "Decimal Odds":
@@ -959,20 +970,39 @@ if not current_elo_df.empty:
                 for col in prob_cols:
                     display_df[col] = display_df[col].apply(lambda p: 1/p if p > 0 else np.nan)
                 st.dataframe(display_df[main_cols].style.format("{:.2f}", na_rep="-"))
-                with st.expander("Prikaži sve detaljne kvote"):
+                with st.expander("Show all detailed odds"):
                     st.dataframe(display_df.style.format("{:.2f}", na_rep="-"))
             else:
                 st.dataframe(results_df[main_cols].style.format("{:.2f}", subset=['avg_rank', 'avg_pts']).format("{:.1%}", subset=[c for c in main_cols if c not in ['avg_rank', 'avg_pts']]))
-                with st.expander("Prikaži sve detaljne verovatnoće"):
+                with st.expander("Show all detailed probabilities"):
                     st.dataframe(results_df.style.format("{:.2f}", subset=['avg_rank', 'avg_pts']).format("{:.1%}", subset=[c for c in results_df.columns if c not in ['avg_rank', 'avg_pts']]))
             
+            # --- INTEGRISANA DETALJNA ANALIZA ---
             st.markdown("---")
             st.header("Detailed Team Analysis")
             
-            selected_team_analysis_uefa = st.selectbox("Select a team for detailed analysis:", options=results_df.index.tolist(), key="uefa_team_select")
+            analysis_teams = list(results_df.index)
+            selected_team_analysis_uefa = st.selectbox("Select a team for detailed analysis:", options=analysis_teams, index=None, placeholder="Choose a team...", key="uefa_team_select")
+            
             if selected_team_analysis_uefa:
+                # Prikaz mečeva
+                original_fixtures = st.session_state.fixtures_df_uefa
+                if original_fixtures is not None:
+                    st.subheader(f"Matches for {selected_team_analysis_uefa}")
+                    original_name = selected_team_analysis_uefa
+                    if st.session_state.corrections:
+                        for key, value in st.session_state.corrections.items():
+                            if value == selected_team_analysis_uefa:
+                                original_name = key
+                                break
+                    team_fixtures = original_fixtures[
+                        (original_fixtures['home_team'] == original_name) | 
+                        (original_fixtures['away_team'] == original_name)
+                    ]
+                    st.dataframe(team_fixtures.reset_index(drop=True))
+
+                # Prikaz očekivanih ishoda
                 st.subheader(f"Expected League Phase Outcomes for {selected_team_analysis_uefa}")
-                
                 avg_wins = np.mean(detailed_results['wins'][selected_team_analysis_uefa])
                 avg_draws = np.mean(detailed_results['draws'][selected_team_analysis_uefa])
                 avg_losses = np.mean(detailed_results['losses'][selected_team_analysis_uefa])
@@ -982,6 +1012,7 @@ if not current_elo_df.empty:
                 an_col2.metric("Expected Draws", f"{avg_draws:.2f}")
                 an_col3.metric("Expected Losses", f"{avg_losses:.2f}")
 
+                # Prikaz verovatnoće poena
                 st.subheader(f"League Phase Points Probability for {selected_team_analysis_uefa}")
                 target_pts_uefa = st.number_input("Target Points:", min_value=0, value=int(results_df.loc[selected_team_analysis_uefa]['avg_pts']), step=1, key="uefa_pts_input")
                 
@@ -999,6 +1030,7 @@ if not current_elo_df.empty:
                     st.metric(f"Under {target_pts_uefa} Points", format_value(prob_under, display_format))
                 with pts_col3:
                     st.metric(f"Exactly {target_pts_uefa} Points", format_value(prob_exact, display_format))
+
 
     with tab3:
         st.header("Custom Tournament Simulation")
