@@ -907,7 +907,14 @@ if not current_elo_df.empty:
         # Glavna logika sada zavisi od session state-a
         if st.session_state.uploaded_uefa_csv_content:
             try:
-                fixtures_df = pd.read_csv(io.StringIO(st.session_state.uploaded_uefa_csv_content))
+                # Prvo pokušavamo sa ';' kao separatorom
+                fixtures_df = pd.read_csv(io.StringIO(st.session_state.uploaded_uefa_csv_content), delimiter=';')
+                
+                # Ako imamo samo jednu kolonu, verovatno je pogrešan separator, pa pokušavamo sa ','
+                if len(fixtures_df.columns) == 1:
+                    st.warning("Tačka-zarez (;) kao separator nije uspeo, pokušavam sa zarezom (,)...")
+                    fixtures_df = pd.read_csv(io.StringIO(st.session_state.uploaded_uefa_csv_content), delimiter=',')
+
                 st.session_state.fixtures_df_uefa = fixtures_df.copy() # Sačuvaj originalni DF za analizu
 
                 if 'home_team' not in fixtures_df.columns or 'away_team' not in fixtures_df.columns:
